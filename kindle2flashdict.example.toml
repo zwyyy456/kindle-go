@@ -1,0 +1,19 @@
+[kindle]
+vocab_db = "/Volumes/Kindle/system/vocabulary/vocab.db"
+
+[sense_source]
+type = "flashdict-bundled-cli"
+cli_path = "/Applications/FlashDict.app/Contents/MacOS/flashdict-cli"
+dictionary_policy = "first-extractable-enabled"
+
+[ai]
+backend = "codex-exec"
+model = "gpt-5.4-mini"
+codex_path = "codex"
+batch_size = 30
+min_confidence = 0.75
+
+[output]
+type = "flashdict-json"
+path = "flashdict-cards.json"
+review_path = "review.jsonl"
