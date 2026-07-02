@@ -1,0 +1,6 @@
+/txt2epub
+*.epub
+*.azw3
+*.mobi
+dist/
+coverage.out

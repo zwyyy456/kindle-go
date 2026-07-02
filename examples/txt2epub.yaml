@@ -1,0 +1,32 @@
+title: 书名
+author: 作者
+language: zh-CN
+
+h1_regex: '^\s*(第[一二三四五六七八九十百千万零〇两\d]+[卷部集篇]).*$'
+h2_regex: '^\s*(第[一二三四五六七八九十百千万零〇两\d]+[章节回]).*$'
+
+merge_lines: true
+trim_blank_lines: true
+split_level: 2
+cover: true
+
+drop_regex:
+  - '^\s*请收藏本站.*$'
+  - '^\s*最新网址.*$'
+
+replace:
+  - pattern: '　+'
+    with: ' '
+
+style:
+  line_height: 1.7
+  paragraph_indent: 2em
+  paragraph_spacing: "0"
+  text_align: justify
+
+calibre:
+  path: ebook-convert
+  output_profile: kindle_pw3
+  extra_args:
+    - --minimum-line-height
+    - "140"
