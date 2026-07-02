@@ -5,14 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func LoadConfig(path string) (Config, error) {
 	cfg := Config{}
-	cfg.SenseSource.Type = "flashdict-bundled-cli"
-	cfg.SenseSource.CLIPath = "/Applications/FlashDict.app/Contents/MacOS/flashdict-cli"
+	cfg.SenseSource.Type = "flashdict-lookup-bridge"
+	cfg.SenseSource.DiscoveryPath = DefaultFlashDictLookupBridgeDiscoveryPath()
 	cfg.SenseSource.DictionaryPolicy = "first-extractable-enabled"
 	cfg.AI.Backend = "codex-exec"
 	cfg.AI.Model = "gpt-5.4-mini"
@@ -37,8 +38,12 @@ func LoadConfig(path string) (Config, error) {
 			cfg.Kindle.VocabDB = value
 		case "sense_source.type":
 			cfg.SenseSource.Type = value
-		case "sense_source.cli_path":
-			cfg.SenseSource.CLIPath = value
+		case "sense_source.discovery_path":
+			if value != "" {
+				cfg.SenseSource.DiscoveryPath = value
+			}
+		case "sense_source.socket_path":
+			cfg.SenseSource.SocketPath = value
 		case "sense_source.dictionary_policy":
 			cfg.SenseSource.DictionaryPolicy = value
 		case "ai.backend":
@@ -60,6 +65,24 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func DefaultFlashDictLookupBridgeDiscoveryPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(
+		home,
+		"Library",
+		"Containers",
+		"tech.hyperseek.flashdict",
+		"Data",
+		"Library",
+		"Application Support",
+		"FlashDict",
+		"lookup-bridge.json",
+	)
 }
 
 func parseSimpleTOML(text string) (map[string]string, error) {
@@ -123,8 +146,11 @@ func validateConfig(cfg Config) error {
 	if cfg.Kindle.VocabDB == "" {
 		return errors.New("kindle.vocab_db is required")
 	}
-	if cfg.SenseSource.Type != "flashdict-bundled-cli" {
+	if cfg.SenseSource.Type != "flashdict-lookup-bridge" {
 		return fmt.Errorf("unsupported sense_source.type: %s", cfg.SenseSource.Type)
+	}
+	if cfg.SenseSource.DiscoveryPath == "" && cfg.SenseSource.SocketPath == "" {
+		return errors.New("sense_source.discovery_path is required unless sense_source.socket_path is set")
 	}
 	if cfg.SenseSource.DictionaryPolicy != "first-extractable-enabled" {
 		return fmt.Errorf("unsupported sense_source.dictionary_policy: %s", cfg.SenseSource.DictionaryPolicy)

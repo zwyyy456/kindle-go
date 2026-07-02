@@ -2,8 +2,7 @@
 vocab_db = "/Volumes/Kindle/system/vocabulary/vocab.db"
 
 [sense_source]
-type = "flashdict-bundled-cli"
-cli_path = "/Applications/FlashDict.app/Contents/MacOS/flashdict-cli"
+type = "flashdict-lookup-bridge"
 dictionary_policy = "first-extractable-enabled"
 
 [ai]

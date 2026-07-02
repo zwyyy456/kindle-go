@@ -13,7 +13,8 @@ type KindleConfig struct {
 
 type SenseSourceConfig struct {
 	Type             string
-	CLIPath          string
+	DiscoveryPath    string
+	SocketPath       string
 	DictionaryPolicy string
 }
 
