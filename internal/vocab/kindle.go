@@ -1,4 +1,4 @@
-package main
+package vocab
 
 import (
 	"database/sql"

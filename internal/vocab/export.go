@@ -1,4 +1,4 @@
-package main
+package vocab
 
 import (
 	"crypto/rand"
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -82,17 +83,17 @@ func WriteJSONL(path string, records []ReviewRecord) error {
 	return nil
 }
 
-func PrintSummary(summary Summary, cfg Config) {
-	fmt.Printf("raw_records=%d\n", summary.RawRecords)
-	fmt.Printf("skipped_missing_usage=%d\n", summary.SkippedMissingUsage)
-	fmt.Printf("deduped_records=%d\n", summary.DedupedRecords)
-	fmt.Printf("lookup_failures=%d\n", summary.LookupFailures)
-	fmt.Printf("ai_low_confidence=%d\n", summary.AILowConfidence)
-	fmt.Printf("ai_invalid=%d\n", summary.AIInvalid)
-	fmt.Printf("cards=%d\n", summary.Cards)
-	fmt.Printf("review_records=%d\n", summary.ReviewRecords)
-	fmt.Printf("output=%s\n", cfg.Output.Path)
-	fmt.Printf("review=%s\n", cfg.Output.ReviewPath)
+func PrintSummary(w io.Writer, summary Summary, cfg Config) {
+	fmt.Fprintf(w, "raw_records=%d\n", summary.RawRecords)
+	fmt.Fprintf(w, "skipped_missing_usage=%d\n", summary.SkippedMissingUsage)
+	fmt.Fprintf(w, "deduped_records=%d\n", summary.DedupedRecords)
+	fmt.Fprintf(w, "lookup_failures=%d\n", summary.LookupFailures)
+	fmt.Fprintf(w, "ai_low_confidence=%d\n", summary.AILowConfidence)
+	fmt.Fprintf(w, "ai_invalid=%d\n", summary.AIInvalid)
+	fmt.Fprintf(w, "cards=%d\n", summary.Cards)
+	fmt.Fprintf(w, "review_records=%d\n", summary.ReviewRecords)
+	fmt.Fprintf(w, "output=%s\n", cfg.Output.Path)
+	fmt.Fprintf(w, "review=%s\n", cfg.Output.ReviewPath)
 }
 
 func NewUUIDString() string {

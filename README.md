@@ -7,6 +7,14 @@
 
 WebUI is planned for a later phase; the current implementation keeps everything in one Go CLI binary.
 
+## Project Layout
+
+- `main.go`: top-level CLI dispatch only.
+- `internal/vocab`: Kindle Vocabulary Builder to FlashDict export workflow.
+- `internal/vocab/cmd`: `vocab` command-line flags and compatibility entrypoints.
+- `internal/txt2epub`: TXT cleaning, chapter parsing, EPUB writing, and optional Calibre conversion.
+- `internal/txt2epub/cmd`: `txt2epub` command-line flags.
+
 ## Vocabulary Export
 
 Current scope:

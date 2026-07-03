@@ -1,4 +1,4 @@
-package main
+package vocab
 
 type Config struct {
 	Kindle      KindleConfig
