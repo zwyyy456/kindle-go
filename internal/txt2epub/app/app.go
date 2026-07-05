@@ -3,12 +3,11 @@ package app
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/flashdict/kindle2flashdict/internal/azw3"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/book"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/calibre"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/epub"
 	txt "github.com/flashdict/kindle2flashdict/internal/txt2epub/text"
@@ -63,16 +62,7 @@ func Run(input string, cfg config.Config, opts Options, stdout io.Writer) error 
 			return err
 		}
 	case "azw3":
-		tmpDir, err := os.MkdirTemp("", "txt2epub-*")
-		if err != nil {
-			return err
-		}
-		defer os.RemoveAll(tmpDir)
-		tmpEPUB := filepath.Join(tmpDir, "book.epub")
-		if err := epub.Write(tmpEPUB, b); err != nil {
-			return err
-		}
-		if err := calibre.Convert(tmpEPUB, output, cfg); err != nil {
+		if err := azw3.Write(output, book.ToEBook(b), azw3.Options{}); err != nil {
 			return err
 		}
 	default:

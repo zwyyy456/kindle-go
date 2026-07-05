@@ -3,17 +3,20 @@
 `kindle2flashdict` is becoming a local Kindle toolbox. The first CLI layer includes:
 
 - `vocab export`: reads Kindle Vocabulary Builder records, asks FlashDict for split sense candidates, uses `codex exec` to pick the sense that matches each usage sentence, and writes a FlashDict flashcard JSON file.
-- `txt2epub`: converts Simplified Chinese TXT files to EPUB, with optional AZW3 output through Calibre's `ebook-convert`.
+- `txt2epub`: converts Simplified Chinese TXT files to EPUB or native AZW3.
+- `serve`: runs a LAN Web UI for uploads/conversion and a Kindle-friendly download page.
 
-WebUI is planned for a later phase; the current implementation keeps everything in one Go CLI binary.
+The implementation keeps everything in one Go CLI binary.
 
 ## Project Layout
 
 - `main.go`: top-level CLI dispatch only.
 - `internal/vocab`: Kindle Vocabulary Builder to FlashDict export workflow.
 - `internal/vocab/cmd`: `vocab` command-line flags and compatibility entrypoints.
-- `internal/txt2epub`: TXT cleaning, chapter parsing, EPUB writing, and optional Calibre conversion.
+- `internal/txt2epub`: TXT cleaning, chapter parsing, EPUB writing, and native AZW3 output.
 - `internal/txt2epub/cmd`: `txt2epub` command-line flags.
+- `internal/server`: local upload library, conversion Web UI, and Kindle download page.
+- `internal/server/cmd`: `serve` command-line flags.
 
 ## Vocabulary Export
 
@@ -63,10 +66,40 @@ Write an EPUB:
 go run . txt2epub book.txt -o book.epub --title "书名" --author "作者"
 ```
 
-Generate AZW3 through Calibre:
+Generate AZW3 with the native writer:
 
 ```sh
 go run . txt2epub book.txt --format azw3
 ```
 
-AZW3 output requires Calibre's `ebook-convert` to be installed. The tool does not implement AZW3/KF8 directly.
+TXT to AZW3 does not require Calibre. EPUB uploads in the LAN Web UI still use Calibre as a temporary EPUB-to-AZW3 fallback.
+
+## LAN Web UI
+
+Run a local upload/conversion server:
+
+```sh
+go run . serve --config txt2epub.toml
+```
+
+Defaults:
+
+- desktop Web UI: `:8787`
+- Kindle download page: `:8788`
+- library directory: `kindle-go-library`
+
+The command prints local URLs such as:
+
+```text
+Web UI:
+  http://127.0.0.1:8787/
+  http://192.168.1.23:8787/
+
+Kindle:
+  http://127.0.0.1:8788/
+  http://192.168.1.23:8788/
+```
+
+Use the desktop Web UI to upload files and explicitly convert them. Uploading only saves the original file; conversion runs synchronously after pressing Convert. TXT can be converted to EPUB or native AZW3. EPUB can be converted to AZW3 through Calibre until the native EPUB reader is implemented. Each uploaded book is shown as the original file plus the latest converted output.
+
+The Kindle page is deliberately plain HTML. It lists the latest Kindle-suitable output for each book, falling back to the original file when the original is already Kindle-suitable. Kindle-suitable formats are AZW3, MOBI, PDF, and TXT; EPUB outputs remain visible in the desktop Web UI but are hidden from the Kindle page because Kindle devices do not directly read downloaded EPUB files.
