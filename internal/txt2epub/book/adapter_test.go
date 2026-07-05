@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/flashdict/kindle2flashdict/internal/ebook"
+	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
 
 func TestToEBookBuildsSpineAndBodyTree(t *testing.T) {
@@ -11,6 +12,12 @@ func TestToEBookBuildsSpineAndBodyTree(t *testing.T) {
 		Title:    "测试书",
 		Author:   "作者",
 		Language: "zh-CN",
+		Style: config.Style{
+			LineHeight:       1.8,
+			ParagraphIndent:  "2em",
+			ParagraphSpacing: "0.4em",
+			TextAlign:        "justify",
+		},
 		Sections: []Section{{
 			ID:    "chapter-001",
 			Title: "第一章 开始",
@@ -25,6 +32,12 @@ func TestToEBookBuildsSpineAndBodyTree(t *testing.T) {
 	got := ToEBook(b)
 	if got.Metadata.Title != "测试书" || got.Metadata.Author != "作者" || got.Metadata.Language != "zh-CN" {
 		t.Fatalf("metadata = %#v", got.Metadata)
+	}
+	if got.Metadata.Identifier != "kindle-go:测试书" {
+		t.Fatalf("identifier = %q", got.Metadata.Identifier)
+	}
+	if got.Style.LineHeight != 1.8 || got.Style.ParagraphSpacing != "0.4em" {
+		t.Fatalf("style = %#v", got.Style)
 	}
 	if len(got.Spine) != 1 {
 		t.Fatalf("spine len = %d", len(got.Spine))

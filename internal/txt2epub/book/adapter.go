@@ -18,9 +18,16 @@ func ToEBook(b Book) ebook.Book {
 	}
 	return ebook.Book{
 		Metadata: ebook.Metadata{
-			Title:    b.Title,
-			Author:   b.Author,
-			Language: b.Language,
+			Title:      b.Title,
+			Author:     b.Author,
+			Language:   b.Language,
+			Identifier: "kindle-go:" + b.Title,
+		},
+		Style: ebook.Style{
+			LineHeight:       b.Style.LineHeight,
+			ParagraphIndent:  b.Style.ParagraphIndent,
+			ParagraphSpacing: b.Style.ParagraphSpacing,
+			TextAlign:        b.Style.TextAlign,
 		},
 		Spine: docs,
 		TOC:   tocEntries(b),

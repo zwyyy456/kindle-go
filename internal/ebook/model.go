@@ -2,6 +2,7 @@ package ebook
 
 type Book struct {
 	Metadata  Metadata
+	Style     Style
 	Spine     []Document
 	Resources []Resource
 	TOC       []TOCEntry
@@ -13,6 +14,13 @@ type Metadata struct {
 	Author     string
 	Language   string
 	Identifier string
+}
+
+type Style struct {
+	LineHeight       float64
+	ParagraphIndent  string
+	ParagraphSpacing string
+	TextAlign        string
 }
 
 type Document struct {
