@@ -12,7 +12,7 @@ const palmEpochDelta = 2082844800
 
 func writePalmDB(w io.Writer, title string, records []record) error {
 	var out bytes.Buffer
-	headerSize := 78 + len(records)*8
+	headerSize := 78 + len(records)*8 + 2
 	offset := headerSize
 	writePalmHeader(&out, title, len(records))
 	for i, record := range records {
@@ -21,6 +21,7 @@ func writePalmDB(w io.Writer, title string, records []record) error {
 		out.Write([]byte{byte(i >> 16), byte(i >> 8), byte(i)})
 		offset += len(record.data)
 	}
+	writeUint16(&out, 0)
 	for _, record := range records {
 		out.Write(record.data)
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 func buildHeaderRecord(c compiledBook, exth []byte) []byte {
-	const mobiHeaderLen = 232
+	const mobiHeaderLen = 264
 	fullName := []byte(c.metadata.Title)
 	fullNameOffset := 16 + mobiHeaderLen + len(exth)
 
@@ -15,32 +15,64 @@ func buildHeaderRecord(c compiledBook, exth []byte) []byte {
 	writeUint16(&w, 1)
 	writeUint16(&w, 0)
 	writeUint32(&w, uint32(len(c.text)))
-	writeUint16(&w, uint16(len(c.chunks)))
+	writeUint16(&w, uint16(len(c.records)))
 	writeUint16(&w, textRecordSize)
 	writeUint16(&w, 0)
 	writeUint16(&w, 0)
 
 	mobi := make([]byte, mobiHeaderLen)
+	put := func(recordOffset int, value uint32) {
+		binary.BigEndian.PutUint32(mobi[recordOffset-16:recordOffset-12], value)
+	}
 	copy(mobi[0:4], "MOBI")
-	binary.BigEndian.PutUint32(mobi[4:8], mobiHeaderLen)
-	binary.BigEndian.PutUint32(mobi[8:12], 2)
-	binary.BigEndian.PutUint32(mobi[12:16], 65001)
-	binary.BigEndian.PutUint32(mobi[16:20], stableID(c.metadata.Identifier+c.metadata.Title))
-	binary.BigEndian.PutUint32(mobi[20:24], 8)
-	binary.BigEndian.PutUint32(mobi[84:88], uint32(fullNameOffset))
-	binary.BigEndian.PutUint32(mobi[88:92], uint32(len(fullName)))
-	binary.BigEndian.PutUint32(mobi[108:112], 6)
-	binary.BigEndian.PutUint32(mobi[112:116], 0xffffffff)
-	binary.BigEndian.PutUint32(mobi[120:124], 0xffffffff)
-	binary.BigEndian.PutUint32(mobi[124:128], 0xffffffff)
-	binary.BigEndian.PutUint32(mobi[128:132], 0x40)
-	binary.BigEndian.PutUint32(mobi[192:196], 0xffffffff)
-	binary.BigEndian.PutUint32(mobi[196:200], 0xffffffff)
-	binary.BigEndian.PutUint32(mobi[200:204], uint32(1))
-	binary.BigEndian.PutUint32(mobi[204:208], uint32(len(c.chunks)))
+	put(20, mobiHeaderLen)
+	put(24, 2)
+	put(28, 65001)
+	put(32, stableID(c.metadata.Identifier+c.metadata.Title))
+	put(36, 8)
+	for off := 40; off < 80; off += 4 {
+		put(off, 0xffffffff)
+	}
+	put(80, uint32(c.firstNonTextRecord))
+	put(84, uint32(fullNameOffset))
+	put(88, uint32(len(fullName)))
+	put(92, languageCode(c.metadata.Language))
+	put(104, 8)
+	put(108, nullIndex)
+	put(112, 0xffffffff)
+	put(116, 0)
+	put(120, 0)
+	put(124, 0)
+	put(128, 0x50)
+	put(164, 0xffffffff)
+	put(168, 0xffffffff)
+	put(172, 0)
+	put(176, 0)
+	put(180, 0)
+	put(192, c.fdstRecord)
+	put(196, c.fdstCount)
+	put(200, c.fcisRecord)
+	put(204, 1)
+	put(208, c.flisRecord)
+	put(212, 1)
+	put(224, 0xffffffff)
+	put(228, 0)
+	put(232, 0xffffffff)
+	put(236, 0xffffffff)
+	put(240, 0)
+	put(244, c.ncxIndexRecord)
+	put(248, c.chunkIndexRecord)
+	put(252, c.skelIndexRecord)
+	put(256, nullIndex)
+	put(260, c.guideIndexRecord)
+	put(264, 0xffffffff)
+	put(268, 0)
+	put(272, 0xffffffff)
+	put(276, 0)
 	w.Write(mobi)
 	w.Write(exth)
 	w.Write(fullName)
+	w.Write(bytes.Repeat([]byte{0}, 8192))
 	return w.Bytes()
 }
 
@@ -64,4 +96,17 @@ func writeUint32(w *bytes.Buffer, value uint32) {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], value)
 	w.Write(buf[:])
+}
+
+func languageCode(language string) uint32 {
+	switch language {
+	case "zh", "zh-CN", "zho", "chi":
+		return 0x0804
+	case "zh-TW":
+		return 0x0404
+	case "en", "en-US":
+		return 0x0409
+	default:
+		return 0
+	}
 }

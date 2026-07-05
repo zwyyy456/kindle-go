@@ -10,23 +10,69 @@ import (
 )
 
 func compileBook(b ebook.Book) (compiledBook, error) {
-	var body bytes.Buffer
+	var flow bytes.Buffer
+	targets := map[string]target{}
+	docs := make([]compiledDocument, 0, len(b.Spine))
+	var chunkTable []chunkEntry
+	chunkSeq := 0
+
 	for i, doc := range b.Spine {
-		if i > 0 {
-			body.WriteString("\n<mbp:pagebreak/>\n")
+		aidByID, bodyAID := assignAIDs(doc.Body, i)
+		rendered := []byte(renderDocument(b.Metadata, b.Style, doc))
+		skeleton, rawChunks, insertOffset := splitSkeletonChunks(rendered)
+		flowStart := flow.Len()
+		compiled := compiledDocument{
+			href:       doc.Href,
+			title:      doc.Title,
+			skeleton:   skeleton,
+			aidByID:    aidByID,
+			bodyAID:    bodyAID,
+			flowStart:  flowStart,
+			rebuildLen: len(rendered),
 		}
-		body.WriteString(renderDocument(b.Metadata, doc))
+		flow.Write(skeleton)
+		chunkStart := 0
+		for _, raw := range rawChunks {
+			content := contentChunk{
+				seq:       chunkSeq,
+				raw:       raw,
+				insertPos: flowStart + insertOffset + chunkStart,
+				startPos:  chunkStart,
+				length:    len(raw),
+				selector:  "S-" + bodyAID,
+			}
+			compiled.chunks = append(compiled.chunks, content)
+			chunkTable = append(chunkTable, chunkEntry{
+				insertPos:      content.insertPos,
+				selector:       content.selector,
+				fileNumber:     i,
+				sequenceNumber: content.seq,
+				startPos:       content.startPos,
+				length:         content.length,
+			})
+			flow.Write(raw)
+			chunkStart += len(raw)
+			chunkSeq++
+		}
+		docs = append(docs, compiled)
+		resolveDocumentTargets(rendered, compiled, targets)
 	}
-	text := body.Bytes()
+	text := flow.Bytes()
 	return compiledBook{
-		metadata: b.Metadata,
-		text:     text,
-		chunks:   chunkBytes(text, textRecordSize),
-		toc:      buildTOCRecord(b),
+		metadata:   b.Metadata,
+		style:      b.Style,
+		text:       text,
+		records:    chunkBytes(text, textRecordSize),
+		documents:  docs,
+		targets:    targets,
+		skelTable:  buildSkelTable(docs),
+		chunkTable: chunkTable,
+		tocTable:   buildNCXTable(b.TOC, targets, len(text)),
+		guideTable: buildGuideTable(b.Guide, targets),
 	}, nil
 }
 
-func renderDocument(meta ebook.Metadata, doc ebook.Document) string {
+func renderDocument(meta ebook.Metadata, style ebook.Style, doc ebook.Document) string {
 	var body bytes.Buffer
 	body.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	body.WriteString(`<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="https://kindlegen.s3.amazonaws.com/AmazonKindlePublishingGuidelines.pdf"`)
@@ -35,10 +81,61 @@ func renderDocument(meta ebook.Metadata, doc ebook.Document) string {
 	}
 	body.WriteString(">\n<head>\n")
 	fmt.Fprintf(&body, "<title>%s</title>\n", html.EscapeString(doc.Title))
+	body.WriteString("<style type=\"text/css\">\n")
+	body.WriteString(css(style))
+	body.WriteString("</style>\n")
 	body.WriteString("</head>\n")
 	renderNode(&body, doc.Body)
 	body.WriteString("\n</html>\n")
 	return body.String()
+}
+
+func assignAIDs(root *ebook.Node, docIndex int) (map[string]string, string) {
+	aidByID := map[string]string{}
+	seq := 0
+	bodyAID := ""
+	var walk func(*ebook.Node)
+	walk = func(n *ebook.Node) {
+		if n == nil || n.Type != ebook.ElementNode {
+			return
+		}
+		if aidableElement(n.Data) {
+			aid := base32(docIndex*1_000_000 + seq)
+			seq++
+			setAttr(n, "aid", aid)
+			if n.Data == "body" {
+				bodyAID = aid
+				aidByID[""] = aid
+			}
+			if id := ebook.AttrValue(n, "id"); id != "" {
+				aidByID[id] = aid
+			}
+		}
+		for _, child := range n.Children {
+			walk(child)
+		}
+	}
+	walk(root)
+	return aidByID, bodyAID
+}
+
+func aidableElement(name string) bool {
+	switch name {
+	case "body", "section", "article", "div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "a", "span", "li", "ol", "ul", "blockquote":
+		return true
+	default:
+		return false
+	}
+}
+
+func setAttr(n *ebook.Node, key, value string) {
+	for i := range n.Attr {
+		if n.Attr[i].Key == key {
+			n.Attr[i].Val = value
+			return
+		}
+	}
+	n.Attr = append(n.Attr, ebook.A(key, value))
 }
 
 func renderNode(w *bytes.Buffer, n *ebook.Node) {
@@ -81,4 +178,109 @@ func safeElementName(name string) string {
 
 func safeAttrName(name string) string {
 	return safeElementName(name)
+}
+
+func findIDOffsets(data []byte) map[string]int {
+	out := map[string]int{}
+	pos := 0
+	for {
+		idx := bytes.Index(data[pos:], []byte(` id="`))
+		if idx < 0 {
+			return out
+		}
+		attrStart := pos + idx + len(` id="`)
+		attrEnd := bytes.IndexByte(data[attrStart:], '"')
+		if attrEnd < 0 {
+			return out
+		}
+		id := html.UnescapeString(string(data[attrStart : attrStart+attrEnd]))
+		tagStart := bytes.LastIndexByte(data[:pos+idx], '<')
+		if tagStart < 0 {
+			tagStart = pos + idx
+		}
+		if id != "" {
+			out[id] = tagStart
+		}
+		pos = attrStart + attrEnd + 1
+	}
+}
+
+func resolveDocumentTargets(rendered []byte, doc compiledDocument, targets map[string]target) {
+	for id, aid := range doc.aidByID {
+		offset := findAIDOffset(rendered, aid)
+		if offset < 0 {
+			continue
+		}
+		t := locateTarget(doc, aid, doc.flowStart+offset)
+		href := doc.href
+		if id != "" {
+			href += "#" + id
+		}
+		targets[href] = t
+	}
+	if body, ok := targets[doc.href+"#"]; ok {
+		targets[doc.href] = body
+	} else if aid := doc.bodyAID; aid != "" {
+		offset := findAIDOffset(rendered, aid)
+		if offset >= 0 {
+			targets[doc.href] = locateTarget(doc, aid, doc.flowStart+offset)
+		}
+	}
+}
+
+func findAIDOffset(data []byte, aid string) int {
+	pattern := []byte(` aid="` + aid + `"`)
+	idx := bytes.Index(data, pattern)
+	if idx < 0 {
+		return -1
+	}
+	tagStart := bytes.LastIndexByte(data[:idx], '<')
+	if tagStart < 0 {
+		return idx
+	}
+	return tagStart
+}
+
+func locateTarget(doc compiledDocument, aid string, absolute int) target {
+	for _, chunk := range doc.chunks {
+		if absolute >= chunk.insertPos && absolute < chunk.insertPos+chunk.length {
+			return target{
+				aid:            aid,
+				absoluteOffset: absolute,
+				chunkSeq:       chunk.seq,
+				chunkOffset:    absolute - chunk.insertPos,
+			}
+		}
+	}
+	for _, chunk := range doc.chunks {
+		if absolute < chunk.insertPos {
+			return target{aid: aid, absoluteOffset: absolute, chunkSeq: chunk.seq}
+		}
+	}
+	if len(doc.chunks) == 0 {
+		return target{aid: aid, absoluteOffset: absolute}
+	}
+	last := doc.chunks[len(doc.chunks)-1]
+	return target{
+		aid:            aid,
+		absoluteOffset: absolute,
+		chunkSeq:       last.seq,
+		chunkOffset:    max(0, min(absolute-last.insertPos, last.length-1)),
+	}
+}
+
+func base32(num int) string {
+	const digits = "0123456789ABCDEFGHIJKLMNOPQRSTUV"
+	if num == 0 {
+		return "0"
+	}
+	var out []byte
+	for num > 0 {
+		out = append(out, digits[num%32])
+		num /= 32
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return string(out)
 }
