@@ -48,7 +48,7 @@ Usage:
 
 Commands:
   vocab export  Export Kindle Vocabulary Builder records to FlashDict card JSON.
-  txt2epub      Convert a TXT book to EPUB, or AZW3 through Calibre.
+  txt2epub      Convert a TXT book to EPUB or native AZW3.
   serve         Run a LAN Web UI and Kindle download page.
 
 Run "%s <command> help" for command-specific usage.
