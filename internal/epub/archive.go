@@ -53,6 +53,18 @@ func (a *archive) read(name string) ([]byte, error) {
 	return data, nil
 }
 
+func (a *archive) size(name string) (uint64, error) {
+	clean, err := cleanArchivePath(name)
+	if err != nil {
+		return 0, err
+	}
+	file := a.files[clean]
+	if file == nil {
+		return 0, fmt.Errorf("epub entry %q not found", clean)
+	}
+	return file.UncompressedSize64, nil
+}
+
 func cleanArchivePath(name string) (string, error) {
 	name = strings.ReplaceAll(strings.TrimSpace(name), `\`, "/")
 	if strings.HasPrefix(name, "/") {

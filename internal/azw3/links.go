@@ -10,23 +10,30 @@ import (
 )
 
 func compileBook(b ebook.Book) (compiledBook, error) {
+	resources, err := compileResources(b.Resources)
+	if err != nil {
+		return compiledBook{}, err
+	}
 	prepared := make([]preparedDocument, 0, len(b.Spine))
 	for i, doc := range b.Spine {
 		aidByID, bodyAID := assignAIDs(doc.Body, i)
 		prepared = append(prepared, preparedDocument{document: doc, aidByID: aidByID, bodyAID: bodyAID})
 	}
+	if err := rewriteImageReferences(prepared, resources); err != nil {
+		return compiledBook{}, err
+	}
 	links, err := prepareInternalLinks(prepared)
 	if err != nil {
 		return compiledBook{}, err
 	}
-	provisional, err := compilePreparedBook(b, prepared)
+	provisional, err := compilePreparedBook(b, prepared, resources.resources)
 	if err != nil {
 		return compiledBook{}, err
 	}
 	if err := resolveInternalLinks(links, provisional.targets); err != nil {
 		return compiledBook{}, err
 	}
-	return compilePreparedBook(b, prepared)
+	return compilePreparedBook(b, prepared, resources.resources)
 }
 
 type preparedDocument struct {
@@ -35,7 +42,7 @@ type preparedDocument struct {
 	bodyAID  string
 }
 
-func compilePreparedBook(b ebook.Book, prepared []preparedDocument) (compiledBook, error) {
+func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []compiledResource) (compiledBook, error) {
 	var flow bytes.Buffer
 	targets := map[string]target{}
 	docs := make([]compiledDocument, 0, len(b.Spine))
@@ -95,6 +102,7 @@ func compilePreparedBook(b ebook.Book, prepared []preparedDocument) (compiledBoo
 		chunkTable: chunkTable,
 		tocTable:   buildNCXTable(b.TOC, targets, len(text)),
 		guideTable: buildGuideTable(b.Guide, targets),
+		resources:  resources,
 	}, nil
 }
 

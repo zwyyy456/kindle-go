@@ -30,6 +30,13 @@ func buildRecords(c compiledBook) ([]record, error) {
 			records = append(records, record{data: data})
 		}
 	}
+	c.firstResourceRecord = nullIndex
+	if len(c.resources) > 0 {
+		c.firstResourceRecord = uint32(len(records))
+		for _, resource := range c.resources {
+			records = append(records, record{data: resource.data})
+		}
+	}
 
 	c.fdstRecord = uint32(len(records))
 	c.fdstCount = 1

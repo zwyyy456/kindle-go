@@ -92,6 +92,10 @@ func Read(filename string, opts Options) (ebook.Book, error) {
 			book.Guide = append(book.Guide, ebook.GuideRef{Type: ref.Type, Title: ref.Title, Href: href})
 		}
 	}
+	book.Resources, err = readImageResources(a, book, opfPath, pkg.Manifest.Items)
+	if err != nil {
+		return ebook.Book{}, err
+	}
 	return book, nil
 }
 

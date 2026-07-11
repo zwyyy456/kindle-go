@@ -18,16 +18,23 @@ type compiledBook struct {
 	chunkTable []chunkEntry
 	tocTable   []ncxEntry
 	guideTable []guideEntry
+	resources  []compiledResource
 
-	firstNonTextRecord int
-	chunkIndexRecord   uint32
-	skelIndexRecord    uint32
-	guideIndexRecord   uint32
-	ncxIndexRecord     uint32
-	fdstRecord         uint32
-	flisRecord         uint32
-	fcisRecord         uint32
-	fdstCount          uint32
+	firstNonTextRecord  int
+	chunkIndexRecord    uint32
+	skelIndexRecord     uint32
+	guideIndexRecord    uint32
+	ncxIndexRecord      uint32
+	fdstRecord          uint32
+	flisRecord          uint32
+	fcisRecord          uint32
+	fdstCount           uint32
+	firstResourceRecord uint32
+}
+
+type compiledResource struct {
+	mediaType string
+	data      []byte
 }
 
 type record struct {

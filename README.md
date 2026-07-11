@@ -80,7 +80,7 @@ Convert a reflowable text EPUB to native AZW3:
 go run . txt2epub --format azw3 book.epub
 ```
 
-The native EPUB reader currently covers metadata, OPF manifest/spine/guide, EPUB3 nav, EPUB2 NCX, text XHTML, cross-document internal links, and bidirectional footnotes. Image resources, external CSS, and SVG remain out of scope.
+The native EPUB reader currently covers metadata, OPF manifest/spine/guide, EPUB3 nav, EPUB2 NCX, text XHTML, cross-document internal links, bidirectional footnotes, and referenced JPEG/PNG images. External CSS and SVG remain out of scope.
 
 ## LAN Web UI
 

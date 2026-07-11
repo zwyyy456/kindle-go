@@ -38,7 +38,7 @@ func buildHeaderRecord(c compiledBook, exth []byte) []byte {
 	put(88, uint32(len(fullName)))
 	put(92, languageCode(c.metadata.Language))
 	put(104, 8)
-	put(108, nullIndex)
+	put(108, c.firstResourceRecord)
 	put(112, 0xffffffff)
 	put(116, 0)
 	put(120, 0)
