@@ -78,3 +78,43 @@ func TestToEBookBuildsNestedTOC(t *testing.T) {
 		t.Fatalf("second child = %#v", got.TOC[0].Children[1])
 	}
 }
+
+func TestToEBookPrependsGeneratedTextCover(t *testing.T) {
+	b := Book{
+		Title:  "测试书",
+		Author: "作者",
+		Cover:  true,
+		Sections: []Section{{
+			ID:    "chapter-001",
+			Title: "第一章",
+		}},
+	}
+
+	got := ToEBook(b)
+	if len(got.Spine) != 2 {
+		t.Fatalf("spine len = %d", len(got.Spine))
+	}
+	cover := got.Spine[0]
+	if cover.Href != "cover.xhtml" || cover.Title != "测试书" {
+		t.Fatalf("cover document = %#v", cover)
+	}
+	section := cover.Body.Children[0]
+	if ebook.AttrValue(section, "class") != "cover" {
+		t.Fatalf("cover section = %#v", section)
+	}
+	var text string
+	for _, child := range section.Children {
+		for _, node := range child.Children {
+			text += node.Data
+		}
+	}
+	if text != "测试书作者" {
+		t.Fatalf("cover text = %q", text)
+	}
+	if got.Spine[1].Href != "text/chapter-001.xhtml" {
+		t.Fatalf("content document = %#v", got.Spine[1])
+	}
+	if len(got.Guide) != 2 || got.Guide[0].Type != "title-page" || got.Guide[1].Type != "text" {
+		t.Fatalf("guide = %#v", got.Guide)
+	}
+}

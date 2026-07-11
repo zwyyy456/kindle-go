@@ -25,6 +25,18 @@ section:first-child > h1:first-child,
 section:first-child > h2:first-child {
   page-break-before: auto;
 }
+.cover {
+  text-align: center;
+  padding-top: 25%%;
+}
+.cover h1 {
+  font-size: 1.6em;
+  page-break-before: auto;
+}
+.cover .author {
+  margin-top: 2em;
+  text-indent: 0;
+}
 `, style.LineHeight, safeCSSIdent(style.TextAlign, "justify"), safeCSSLength(style.ParagraphSpacing, "0"), safeCSSLength(style.ParagraphIndent, "2em"))
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/flashdict/kindle2flashdict/internal/ebook"
+	txtbook "github.com/flashdict/kindle2flashdict/internal/txt2epub/book"
 )
 
 func TestWriteNavigationIndexTargetsRealChunk(t *testing.T) {
@@ -119,6 +120,67 @@ func TestWriteNavigationIndexTargetsRealChunk(t *testing.T) {
 	firstTarget := compiled.targets["text/chapter-001.xhtml#heading-001"]
 	if len(guidePosFID) < 2 || guidePosFID[0] != firstTarget.chunkSeq || guidePosFID[1] != firstTarget.chunkOffset {
 		t.Fatalf("guide pos_fid = %v, want [%d %d]", guidePosFID, firstTarget.chunkSeq, firstTarget.chunkOffset)
+	}
+}
+
+func TestWriteGeneratedTextCoverToBinaryIndexes(t *testing.T) {
+	source := txtbook.ToEBook(txtbook.Book{
+		Title:  "测试书",
+		Author: "作者",
+		Cover:  true,
+		Sections: []txtbook.Section{{
+			ID:    "chapter-001",
+			Title: "第一章",
+			Blocks: []txtbook.Block{
+				{Kind: txtbook.BlockHeading, Level: 2, Text: "第一章", ID: "heading-001"},
+				{Kind: txtbook.BlockParagraph, Text: "正文。"},
+			},
+		}},
+		Headings: []txtbook.Heading{{
+			ID: "heading-001", Title: "第一章", Level: 2, SectionID: "chapter-001",
+		}},
+	})
+	normalized := normalizeBook(source)
+	compiled, err := compileBook(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "cover.azw3")
+	if err := Write(out, source, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	records := readAZW3Records(t, out)
+	header := inspectAZW3MOBIHeader(t, records[0])
+	text := bytes.Join(records[1:int(header.firstNonText)], nil)
+	chunkIndex := inspectAZW3Index(t, records, header.chunkIndex)
+	skelIndex := inspectAZW3Index(t, records, header.skelIndex)
+	guideIndex := inspectAZW3Index(t, records, header.guideIndex)
+
+	if len(skelIndex.entries) != 2 {
+		t.Fatalf("skeleton entries = %d, want cover + content", len(skelIndex.entries))
+	}
+	var coverContent []byte
+	for _, chunk := range chunksForFileNumber(t, chunkIndex.entries, 0) {
+		seq := requiredTag(t, chunk, 4, "sequence_number")[0]
+		coverContent = append(coverContent, inspectChunkRawBySequence(t, text, skelIndex.entries, chunkIndex.entries, seq)...)
+	}
+	for _, want := range []string{"测试书", "作者"} {
+		if !bytes.Contains(coverContent, []byte(want)) {
+			t.Fatalf("cover content missing %q: %q", want, coverContent)
+		}
+	}
+
+	if len(guideIndex.entries) != 2 || guideIndex.entries[0].lead != "title-page" || guideIndex.entries[1].lead != "text" {
+		t.Fatalf("guide entries = %#v", guideIndex.entries)
+	}
+	for i, href := range []string{"cover.xhtml", "text/chapter-001.xhtml"} {
+		got := requiredTag(t, guideIndex.entries[i], 6, "guide pos_fid")
+		want := compiled.targets[href]
+		if len(got) < 2 || got[0] != want.chunkSeq || got[1] != want.chunkOffset {
+			t.Fatalf("guide %q pos_fid = %v, want [%d %d]", guideIndex.entries[i].lead, got, want.chunkSeq, want.chunkOffset)
+		}
 	}
 }
 

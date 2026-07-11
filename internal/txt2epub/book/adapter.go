@@ -7,7 +7,10 @@ import (
 )
 
 func ToEBook(b Book) ebook.Book {
-	docs := make([]ebook.Document, 0, len(b.Sections))
+	docs := make([]ebook.Document, 0, len(b.Sections)+1)
+	if b.Cover {
+		docs = append(docs, textCoverDocument(b))
+	}
 	for _, section := range b.Sections {
 		href := sectionHref(section)
 		docs = append(docs, ebook.Document{
@@ -16,7 +19,7 @@ func ToEBook(b Book) ebook.Book {
 			Body:  sectionBody(section),
 		})
 	}
-	return ebook.Book{
+	out := ebook.Book{
 		Metadata: ebook.Metadata{
 			Title:      b.Title,
 			Author:     b.Author,
@@ -31,6 +34,36 @@ func ToEBook(b Book) ebook.Book {
 		},
 		Spine: docs,
 		TOC:   tocEntries(b),
+	}
+	if b.Cover {
+		out.Guide = []ebook.GuideRef{{
+			Type:  "title-page",
+			Title: "扉页",
+			Href:  "cover.xhtml",
+		}}
+		if len(b.Sections) > 0 {
+			out.Guide = append(out.Guide, ebook.GuideRef{
+				Type:  "text",
+				Title: b.Sections[0].Title,
+				Href:  sectionHref(b.Sections[0]),
+			})
+		}
+	}
+	return out
+}
+
+func textCoverDocument(b Book) ebook.Document {
+	return ebook.Document{
+		Href:  "cover.xhtml",
+		Title: b.Title,
+		Body: ebook.Element("body", nil,
+			ebook.Element("section", []ebook.Attr{
+				ebook.A("class", "cover"),
+			},
+				ebook.Element("h1", nil, ebook.Text(b.Title)),
+				ebook.Element("p", []ebook.Attr{ebook.A("class", "author")}, ebook.Text(b.Author)),
+			),
+		),
 	}
 }
 
