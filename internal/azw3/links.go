@@ -37,7 +37,19 @@ func compileBook(b ebook.Book) (compiledBook, error) {
 	if err := resolveInternalLinks(links, provisional.targets); err != nil {
 		return compiledBook{}, err
 	}
-	return compilePreparedBook(b, prepared, resources.resources, documentCSS)
+	compiled, err := compilePreparedBook(b, prepared, resources.resources, documentCSS)
+	if err != nil {
+		return compiledBook{}, err
+	}
+	compiled.coverResourceOffset = nullIndex
+	if b.Cover != nil && b.Cover.ImageHref != "" {
+		index, ok := resources.byHref[b.Cover.ImageHref]
+		if !ok {
+			return compiledBook{}, fmt.Errorf("cover image %q has no resource", b.Cover.ImageHref)
+		}
+		compiled.coverResourceOffset = uint32(index)
+	}
+	return compiled, nil
 }
 
 type preparedDocument struct {

@@ -30,6 +30,7 @@ type compiledBook struct {
 	fcisRecord          uint32
 	fdstCount           uint32
 	firstResourceRecord uint32
+	coverResourceOffset uint32
 }
 
 type compiledResource struct {

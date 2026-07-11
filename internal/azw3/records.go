@@ -47,7 +47,7 @@ func buildRecords(c compiledBook) ([]record, error) {
 	records = append(records, record{data: buildFCIS(len(c.text))})
 	records = append(records, record{data: []byte{0xe9, 0x8e, 0x0d, 0x0a}})
 
-	exth := buildEXTH(c.metadata)
+	exth := buildEXTH(c.metadata, c.coverResourceOffset)
 	records[0] = record{data: buildHeaderRecord(c, exth)}
 	return records, nil
 }

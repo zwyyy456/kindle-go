@@ -8,24 +8,31 @@ import (
 	"github.com/flashdict/kindle2flashdict/internal/ebook"
 )
 
-func buildEXTH(meta ebook.Metadata) []byte {
+func buildEXTH(meta ebook.Metadata, coverOffset uint32) []byte {
 	var records [][]byte
-	add := func(recordType uint32, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		data := []byte(value)
+	addBytes := func(recordType uint32, data []byte) {
 		record := make([]byte, 8+len(data))
 		binary.BigEndian.PutUint32(record[0:4], recordType)
 		binary.BigEndian.PutUint32(record[4:8], uint32(len(record)))
 		copy(record[8:], data)
 		records = append(records, record)
 	}
+	add := func(recordType uint32, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		addBytes(recordType, []byte(value))
+	}
 	add(503, meta.Title)
 	add(100, meta.Author)
 	add(524, meta.Language)
 	add(113, meta.Identifier)
+	if coverOffset != nullIndex {
+		var value [4]byte
+		binary.BigEndian.PutUint32(value[:], coverOffset)
+		addBytes(201, value[:])
+	}
 
 	total := 12
 	for _, record := range records {

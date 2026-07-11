@@ -7,6 +7,12 @@ type Book struct {
 	Resources []Resource
 	TOC       []TOCEntry
 	Guide     []GuideRef
+	Cover     *Cover
+}
+
+type Cover struct {
+	ImageHref     string
+	TitlePageHref string
 }
 
 type Metadata struct {

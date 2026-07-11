@@ -8,10 +8,11 @@ import (
 
 type packageDocument struct {
 	Metadata struct {
-		Titles      []string `xml:"title"`
-		Creators    []string `xml:"creator"`
-		Languages   []string `xml:"language"`
-		Identifiers []string `xml:"identifier"`
+		Titles      []string       `xml:"title"`
+		Creators    []string       `xml:"creator"`
+		Languages   []string       `xml:"language"`
+		Identifiers []string       `xml:"identifier"`
+		Metas       []metadataMeta `xml:"meta"`
 	} `xml:"metadata"`
 	Manifest struct {
 		Items []manifestItem `xml:"item"`
@@ -23,6 +24,13 @@ type packageDocument struct {
 	Guide struct {
 		References []guideReference `xml:"reference"`
 	} `xml:"guide"`
+}
+
+type metadataMeta struct {
+	Name     string `xml:"name,attr"`
+	Content  string `xml:"content,attr"`
+	Property string `xml:"property,attr"`
+	Value    string `xml:",chardata"`
 }
 
 type manifestItem struct {

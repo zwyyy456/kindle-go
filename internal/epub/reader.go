@@ -45,6 +45,10 @@ func Read(filename string, opts Options) (ebook.Book, error) {
 	if book.Metadata.Language == "" {
 		book.Metadata.Language = strings.TrimSpace(opts.DefaultLanguage)
 	}
+	book.Cover, err = readCover(a, opfPath, pkg, items)
+	if err != nil {
+		return ebook.Book{}, err
+	}
 
 	for i, ref := range pkg.Spine.ItemRefs {
 		item, ok := items[ref.IDRef]
