@@ -10,14 +10,40 @@ import (
 )
 
 func compileBook(b ebook.Book) (compiledBook, error) {
+	prepared := make([]preparedDocument, 0, len(b.Spine))
+	for i, doc := range b.Spine {
+		aidByID, bodyAID := assignAIDs(doc.Body, i)
+		prepared = append(prepared, preparedDocument{document: doc, aidByID: aidByID, bodyAID: bodyAID})
+	}
+	links, err := prepareInternalLinks(prepared)
+	if err != nil {
+		return compiledBook{}, err
+	}
+	provisional, err := compilePreparedBook(b, prepared)
+	if err != nil {
+		return compiledBook{}, err
+	}
+	if err := resolveInternalLinks(links, provisional.targets); err != nil {
+		return compiledBook{}, err
+	}
+	return compilePreparedBook(b, prepared)
+}
+
+type preparedDocument struct {
+	document ebook.Document
+	aidByID  map[string]string
+	bodyAID  string
+}
+
+func compilePreparedBook(b ebook.Book, prepared []preparedDocument) (compiledBook, error) {
 	var flow bytes.Buffer
 	targets := map[string]target{}
 	docs := make([]compiledDocument, 0, len(b.Spine))
 	var chunkTable []chunkEntry
 	chunkSeq := 0
 
-	for i, doc := range b.Spine {
-		aidByID, bodyAID := assignAIDs(doc.Body, i)
+	for i, source := range prepared {
+		doc := source.document
 		rendered := []byte(renderDocument(b.Metadata, b.Style, doc))
 		skeleton, rawChunks, insertOffset := splitSkeletonChunks(rendered)
 		flowStart := flow.Len()
@@ -25,8 +51,8 @@ func compileBook(b ebook.Book) (compiledBook, error) {
 			href:       doc.Href,
 			title:      doc.Title,
 			skeleton:   skeleton,
-			aidByID:    aidByID,
-			bodyAID:    bodyAID,
+			aidByID:    source.aidByID,
+			bodyAID:    source.bodyAID,
 			flowStart:  flowStart,
 			rebuildLen: len(rendered),
 		}
@@ -39,7 +65,7 @@ func compileBook(b ebook.Book) (compiledBook, error) {
 				insertPos: flowStart + insertOffset + chunkStart,
 				startPos:  chunkStart,
 				length:    len(raw),
-				selector:  "S-" + bodyAID,
+				selector:  "S-" + source.bodyAID,
 			}
 			compiled.chunks = append(compiled.chunks, content)
 			chunkTable = append(chunkTable, chunkEntry{
@@ -99,7 +125,7 @@ func assignAIDs(root *ebook.Node, docIndex int) (map[string]string, string) {
 		if n == nil || n.Type != ebook.ElementNode {
 			return
 		}
-		if aidableElement(n.Data) {
+		if aidableElement(n.Data) || ebook.AttrValue(n, "id") != "" {
 			aid := base32(docIndex*1_000_000 + seq)
 			seq++
 			setAttr(n, "aid", aid)

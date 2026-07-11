@@ -62,6 +62,9 @@ func xmlAttrs(attrs []xml.Attr) []ebook.Attr {
 	out := make([]ebook.Attr, 0, len(attrs))
 	for _, attr := range attrs {
 		key := strings.ToLower(attr.Name.Local)
+		if attr.Name.Space == "http://www.idpf.org/2007/ops" {
+			key = "epub:" + key
+		}
 		if key == "xmlns" {
 			continue
 		}
@@ -100,7 +103,7 @@ var keptElements = map[string]bool{
 	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
 	"p": true, "blockquote": true, "ol": true, "ul": true, "li": true,
 	"br": true, "a": true, "span": true, "em": true, "strong": true,
-	"b": true, "i": true,
+	"b": true, "i": true, "aside": true, "sup": true, "sub": true,
 }
 
 var droppedElements = map[string]bool{
@@ -112,6 +115,7 @@ var droppedElements = map[string]bool{
 var keptAttrs = map[string]bool{
 	"id": true, "class": true, "href": true, "src": true,
 	"lang": true, "title": true, "role": true, "type": true, "name": true,
+	"epub:type": true,
 }
 
 func sanitizeNode(node *ebook.Node, sourcePath string) []*ebook.Node {
@@ -133,6 +137,7 @@ func sanitizeNode(node *ebook.Node, sourcePath string) []*ebook.Node {
 		return children
 	}
 	attrs := make([]ebook.Attr, 0, len(node.Attr))
+	hasID := ebook.AttrValue(node, "id") != ""
 	for _, attr := range node.Attr {
 		key := strings.ToLower(attr.Key)
 		if !keptAttrs[key] {
@@ -145,6 +150,10 @@ func sanitizeNode(node *ebook.Node, sourcePath string) []*ebook.Node {
 			}
 		}
 		attrs = append(attrs, ebook.A(key, value))
+		if key == "name" && !hasID && strings.EqualFold(name, "a") && strings.TrimSpace(value) != "" {
+			attrs = append(attrs, ebook.A("id", value))
+			hasID = true
+		}
 	}
 	return []*ebook.Node{ebook.Element(name, attrs, children...)}
 }

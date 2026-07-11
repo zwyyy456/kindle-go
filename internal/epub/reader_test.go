@@ -38,7 +38,7 @@ func TestReadEPUB3MetadataSpineNavGuideAndPaths(t *testing.T) {
 		"OEBPS/Text/ch1.xhtml": `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>第一章</title></head><body>
 <main><article><h1 id="one">第一章</h1><p>中文正文&nbsp;一。</p>
-<a href="sub/ch2.xhtml#two">下一章</a><script>不应保留</script></article></main>
+<a href="sub/ch2.xhtml#two" epub:type="noteref" xmlns:epub="http://www.idpf.org/2007/ops">下一章</a><script>不应保留</script></article></main>
 </body></html>`,
 		"OEBPS/Text/sub/ch2.xhtml": `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><section><h2 id="two">第二章</h2><p>正文二。</p></section></body></html>`,
@@ -70,6 +70,9 @@ func TestReadEPUB3MetadataSpineNavGuideAndPaths(t *testing.T) {
 	link := findElement(book.Spine[0].Body, "a")
 	if ebook.AttrValue(link, "href") != "OEBPS/Text/sub/ch2.xhtml#two" {
 		t.Fatalf("normalized body href = %q", ebook.AttrValue(link, "href"))
+	}
+	if ebook.AttrValue(link, "epub:type") != "noteref" {
+		t.Fatalf("epub:type = %q", ebook.AttrValue(link, "epub:type"))
 	}
 	if len(book.TOC) != 1 || book.TOC[0].Href != "OEBPS/Text/ch1.xhtml#one" || len(book.TOC[0].Children) != 1 || book.TOC[0].Children[0].Href != "OEBPS/Text/sub/ch2.xhtml#two" {
 		t.Fatalf("toc = %#v", book.TOC)
