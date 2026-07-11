@@ -22,18 +22,22 @@ func compileBook(b ebook.Book) (compiledBook, error) {
 	if err := rewriteImageReferences(prepared, resources); err != nil {
 		return compiledBook{}, err
 	}
+	documentCSS, err := compileDocumentCSS(b, resources)
+	if err != nil {
+		return compiledBook{}, err
+	}
 	links, err := prepareInternalLinks(prepared)
 	if err != nil {
 		return compiledBook{}, err
 	}
-	provisional, err := compilePreparedBook(b, prepared, resources.resources)
+	provisional, err := compilePreparedBook(b, prepared, resources.resources, documentCSS)
 	if err != nil {
 		return compiledBook{}, err
 	}
 	if err := resolveInternalLinks(links, provisional.targets); err != nil {
 		return compiledBook{}, err
 	}
-	return compilePreparedBook(b, prepared, resources.resources)
+	return compilePreparedBook(b, prepared, resources.resources, documentCSS)
 }
 
 type preparedDocument struct {
@@ -42,7 +46,7 @@ type preparedDocument struct {
 	bodyAID  string
 }
 
-func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []compiledResource) (compiledBook, error) {
+func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []compiledResource, documentCSS map[string]string) (compiledBook, error) {
 	var flow bytes.Buffer
 	targets := map[string]target{}
 	docs := make([]compiledDocument, 0, len(b.Spine))
@@ -51,7 +55,7 @@ func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []
 
 	for i, source := range prepared {
 		doc := source.document
-		rendered := []byte(renderDocument(b.Metadata, b.Style, doc))
+		rendered := []byte(renderDocument(b.Metadata, b.Style, doc, documentCSS[doc.Href]))
 		skeleton, rawChunks, insertOffset := splitSkeletonChunks(rendered)
 		flowStart := flow.Len()
 		compiled := compiledDocument{
@@ -106,7 +110,7 @@ func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []
 	}, nil
 }
 
-func renderDocument(meta ebook.Metadata, style ebook.Style, doc ebook.Document) string {
+func renderDocument(meta ebook.Metadata, style ebook.Style, doc ebook.Document, extraCSS string) string {
 	var body bytes.Buffer
 	body.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	body.WriteString(`<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="https://kindlegen.s3.amazonaws.com/AmazonKindlePublishingGuidelines.pdf"`)
@@ -117,6 +121,10 @@ func renderDocument(meta ebook.Metadata, style ebook.Style, doc ebook.Document) 
 	fmt.Fprintf(&body, "<title>%s</title>\n", html.EscapeString(doc.Title))
 	body.WriteString("<style type=\"text/css\">\n")
 	body.WriteString(css(style))
+	if extraCSS != "" {
+		body.WriteByte('\n')
+		body.WriteString(extraCSS)
+	}
 	body.WriteString("</style>\n")
 	body.WriteString("</head>\n")
 	renderNode(&body, doc.Body)

@@ -19,6 +19,9 @@ func compileResources(resources []ebook.Resource) (resourceCatalog, error) {
 	byDigest := map[[32]byte]int{}
 	for _, resource := range resources {
 		mediaType := strings.ToLower(strings.TrimSpace(resource.MediaType))
+		if mediaType == "text/css" {
+			continue
+		}
 		if mediaType != "image/jpeg" && mediaType != "image/png" {
 			return resourceCatalog{}, fmt.Errorf("unsupported AZW3 resource media type %q for %q", resource.MediaType, resource.Href)
 		}

@@ -62,14 +62,14 @@ func Read(filename string, opts Options) (ebook.Book, error) {
 		if err != nil {
 			return ebook.Book{}, err
 		}
-		body, title, err := xhtmlBody(data, referencePath(docPath))
+		body, title, stylesheets, err := xhtmlBody(data, referencePath(docPath))
 		if err != nil {
 			return ebook.Book{}, err
 		}
 		if title == "" {
 			title = fmt.Sprintf("Chapter %d", i+1)
 		}
-		book.Spine = append(book.Spine, ebook.Document{Href: referencePath(docPath), Title: title, Body: body})
+		book.Spine = append(book.Spine, ebook.Document{Href: referencePath(docPath), Title: title, Body: body, Stylesheets: stylesheets})
 	}
 	spinePaths := make(map[string]bool, len(book.Spine))
 	for _, doc := range book.Spine {
@@ -92,7 +92,7 @@ func Read(filename string, opts Options) (ebook.Book, error) {
 			book.Guide = append(book.Guide, ebook.GuideRef{Type: ref.Type, Title: ref.Title, Href: href})
 		}
 	}
-	book.Resources, err = readImageResources(a, book, opfPath, pkg.Manifest.Items)
+	book.Resources, err = readResources(a, &book, opfPath, pkg.Manifest.Items)
 	if err != nil {
 		return ebook.Book{}, err
 	}

@@ -24,9 +24,10 @@ type Style struct {
 }
 
 type Document struct {
-	Href  string
-	Title string
-	Body  *Node
+	Href        string
+	Title       string
+	Body        *Node
+	Stylesheets []string
 }
 
 type Node struct {

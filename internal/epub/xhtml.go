@@ -73,18 +73,22 @@ func xmlAttrs(attrs []xml.Attr) []ebook.Attr {
 	return out
 }
 
-func xhtmlBody(data []byte, sourcePath string) (*ebook.Node, string, error) {
+func xhtmlBody(data []byte, sourcePath string) (*ebook.Node, string, []string, error) {
 	root, err := parseXMLTree(data)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	body := findElement(root, "body")
 	if body == nil {
-		return nil, "", fmt.Errorf("xhtml %q has no body", sourcePath)
+		return nil, "", nil, fmt.Errorf("xhtml %q has no body", sourcePath)
+	}
+	stylesheets, err := linkedStylesheets(root, sourcePath)
+	if err != nil {
+		return nil, "", nil, err
 	}
 	cleaned := sanitizeNode(body, sourcePath)
 	if len(cleaned) != 1 {
-		return nil, "", fmt.Errorf("xhtml %q produced invalid body", sourcePath)
+		return nil, "", nil, fmt.Errorf("xhtml %q produced invalid body", sourcePath)
 	}
 	title := strings.TrimSpace(textContent(findElement(root, "title")))
 	if title == "" {
@@ -95,7 +99,39 @@ func xhtmlBody(data []byte, sourcePath string) (*ebook.Node, string, error) {
 			}
 		}
 	}
-	return cleaned[0], title, nil
+	return cleaned[0], title, stylesheets, nil
+}
+
+func linkedStylesheets(root *ebook.Node, sourcePath string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	var walk func(*ebook.Node) error
+	walk = func(node *ebook.Node) error {
+		if node == nil || node.Type != ebook.ElementNode {
+			return nil
+		}
+		if strings.EqualFold(node.Data, "body") {
+			return nil
+		}
+		if strings.EqualFold(node.Data, "link") && hasToken(ebook.AttrValue(node, "rel"), "stylesheet") {
+			href, err := resolveReference(sourcePath, ebook.AttrValue(node, "href"))
+			if err != nil {
+				return fmt.Errorf("resolve stylesheet in %q: %w", sourcePath, err)
+			}
+			href = referencePath(href)
+			if !seen[href] {
+				seen[href] = true
+				out = append(out, href)
+			}
+		}
+		for _, child := range node.Children {
+			if err := walk(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return out, walk(root)
 }
 
 var keptElements = map[string]bool{
@@ -117,6 +153,7 @@ var keptAttrs = map[string]bool{
 	"lang": true, "title": true, "role": true, "type": true, "name": true,
 	"epub:type": true,
 	"alt":       true, "width": true, "height": true,
+	"rel": true,
 }
 
 func sanitizeNode(node *ebook.Node, sourcePath string) []*ebook.Node {

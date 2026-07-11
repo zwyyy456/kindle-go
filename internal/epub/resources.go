@@ -15,7 +15,7 @@ import (
 const maxImageResourceBytes = 64 << 20
 const maxTotalImageBytes = 128 << 20
 
-func readImageResources(a *archive, book ebook.Book, opfPath string, manifest []manifestItem) ([]ebook.Resource, error) {
+func readImageResources(a *archive, book ebook.Book, opfPath string, manifest []manifestItem, extraRefs []string) ([]ebook.Resource, error) {
 	items := make(map[string]manifestItem, len(manifest))
 	for _, item := range manifest {
 		href, err := resolveReference(opfPath, item.Href)
@@ -27,6 +27,12 @@ func readImageResources(a *archive, book ebook.Book, opfPath string, manifest []
 	seen := map[string]bool{}
 	for _, doc := range book.Spine {
 		collectImageRefs(doc.Body, &refs, seen)
+	}
+	for _, href := range extraRefs {
+		if !seen[href] {
+			seen[href] = true
+			refs = append(refs, href)
+		}
 	}
 	if len(refs) == 0 {
 		return nil, nil
