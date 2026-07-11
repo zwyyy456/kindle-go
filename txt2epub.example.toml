@@ -25,8 +25,3 @@ line_height = 1.7
 paragraph_indent = "2em"
 paragraph_spacing = "0"
 text_align = "justify"
-
-[calibre]
-path = "ebook-convert"
-output_profile = "kindle_pw3"
-extra_args = ["--minimum-line-height", "140"]

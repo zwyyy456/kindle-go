@@ -3,7 +3,7 @@
 `kindle2flashdict` is becoming a local Kindle toolbox. The first CLI layer includes:
 
 - `vocab export`: reads Kindle Vocabulary Builder records, asks FlashDict for split sense candidates, uses `codex exec` to pick the sense that matches each usage sentence, and writes a FlashDict flashcard JSON file.
-- `txt2epub`: converts Simplified Chinese TXT files to EPUB or native AZW3.
+- `txt2epub`: converts Simplified Chinese TXT files to EPUB/native AZW3 and reflowable text EPUB files to native AZW3.
 - `serve`: runs a LAN Web UI for uploads/conversion and a Kindle-friendly download page.
 
 The implementation keeps everything in one Go CLI binary.
@@ -63,16 +63,24 @@ go run . txt2epub --preview book.txt
 Write an EPUB:
 
 ```sh
-go run . txt2epub book.txt -o book.epub --title "书名" --author "作者"
+go run . txt2epub -o book.epub --title "书名" --author "作者" book.txt
 ```
 
 Generate AZW3 with the native writer:
 
 ```sh
-go run . txt2epub book.txt --format azw3
+go run . txt2epub --format azw3 book.txt
 ```
 
-TXT to AZW3 does not require Calibre. EPUB uploads in the LAN Web UI still use Calibre as a temporary EPUB-to-AZW3 fallback.
+TXT and text-only EPUB conversion to AZW3 do not require Calibre.
+
+Convert a reflowable text EPUB to native AZW3:
+
+```sh
+go run . txt2epub --format azw3 book.epub
+```
+
+The native EPUB reader currently covers metadata, OPF manifest/spine/guide, EPUB3 nav, EPUB2 NCX, and text XHTML. Image resources, external CSS, SVG, and complex in-content links remain out of scope for this first EPUB phase.
 
 ## LAN Web UI
 
@@ -100,6 +108,6 @@ Kindle:
   http://192.168.1.23:8788/
 ```
 
-Use the desktop Web UI to upload files and explicitly convert them. Uploading only saves the original file; conversion runs synchronously after pressing Convert. TXT can be converted to EPUB or native AZW3. EPUB can be converted to AZW3 through Calibre until the native EPUB reader is implemented. Each uploaded book is shown as the original file plus the latest converted output.
+Use the desktop Web UI to upload files and explicitly convert them. Uploading only saves the original file; conversion runs synchronously after pressing Convert. TXT can be converted to EPUB or native AZW3. Reflowable text EPUB can be converted to AZW3 with the native reader and writer. Each uploaded book is shown as the original file plus the latest converted output.
 
 The Kindle page is deliberately plain HTML. It lists the latest Kindle-suitable output for each book, falling back to the original file when the original is already Kindle-suitable. Kindle-suitable formats are AZW3, MOBI, PDF, and TXT; EPUB outputs remain visible in the desktop Web UI but are hidden from the Kindle page because Kindle devices do not directly read downloaded EPUB files.

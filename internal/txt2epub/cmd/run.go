@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
+	"github.com/flashdict/kindle2flashdict/internal/converter"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/app"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
@@ -28,7 +30,6 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	var flags cliFlags
 	var dropRegex stringList
 	var replaceRegex stringList
-	var calibreArgs stringList
 
 	fs.StringVar(&flags.configPath, "config", "", "config file path (.toml, .yaml, .yml)")
 	fs.StringVar(&flags.output, "o", "", "output file path")
@@ -47,10 +48,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&flags.noTrimBlankLines, "no-trim-blank-lines", false, "disable repeated blank line trimming")
 	fs.Var(&dropRegex, "drop-regex", "drop lines matching regex; repeatable")
 	fs.Var(&replaceRegex, "replace-regex", "replace regex in pattern=replacement form; repeatable")
-	fs.StringVar(&flags.calibrePath, "calibre-path", "", "path to ebook-convert")
-	fs.Var(&calibreArgs, "calibre-arg", "extra argument passed to ebook-convert; repeatable")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: txt2epub [options] input.txt")
+		fmt.Fprintln(stderr, "Usage: txt2epub [options] input.txt|input.epub")
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Options:")
 		fs.PrintDefaults()
@@ -64,7 +63,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: txt2epub [options] input.txt")
+		return fmt.Errorf("usage: txt2epub [options] input.txt|input.epub")
 	}
 
 	cfg, _, err := config.Load(flags.configPath)
@@ -75,10 +74,36 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	fs.Visit(func(f *flag.Flag) {
 		visited[f.Name] = true
 	})
-	applyCLI(&cfg, flags, dropRegex, replaceRegex, calibreArgs, visited)
+	applyCLI(&cfg, flags, dropRegex, replaceRegex, visited)
+	input := fs.Arg(0)
+	if strings.EqualFold(filepath.Ext(input), ".epub") {
+		if flags.preview {
+			return fmt.Errorf("preview is only supported for TXT input")
+		}
+		if !visited["format"] {
+			cfg.Format = "azw3"
+		}
+		config.Normalize(&cfg)
+		if cfg.Format != "azw3" {
+			return fmt.Errorf("EPUB input can only be converted to AZW3")
+		}
+		output := config.OutputPath(input, cfg)
+		if !strings.EqualFold(filepath.Ext(output), ".azw3") {
+			return fmt.Errorf("EPUB conversion output must use .azw3 extension")
+		}
+		if err := converter.EPUBToAZW3(input, output, converter.EPUBOptions{
+			DefaultLanguage: cfg.Language,
+			Title:           cfg.Title,
+			Author:          cfg.Author,
+		}); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "wrote %s\n", output)
+		return nil
+	}
 	config.Normalize(&cfg)
 
-	return app.Run(fs.Arg(0), cfg, app.Options{
+	return app.Run(input, cfg, app.Options{
 		ConfigPath: flags.configPath,
 		Preview:    flags.preview,
 		Verbose:    flags.verbose,
@@ -100,10 +125,9 @@ type cliFlags struct {
 	noCover          bool
 	noMergeLines     bool
 	noTrimBlankLines bool
-	calibrePath      string
 }
 
-func applyCLI(cfg *config.Config, flags cliFlags, dropRegex, replaceRegex, calibreArgs []string, visited map[string]bool) {
+func applyCLI(cfg *config.Config, flags cliFlags, dropRegex, replaceRegex []string, visited map[string]bool) {
 	if visited["o"] || visited["output"] {
 		cfg.Output = flags.output
 	}
@@ -146,11 +170,5 @@ func applyCLI(cfg *config.Config, flags cliFlags, dropRegex, replaceRegex, calib
 			pattern, with = raw, ""
 		}
 		cfg.Replace = append(cfg.Replace, config.ReplaceRule{Pattern: pattern, With: with})
-	}
-	if visited["calibre-path"] {
-		cfg.Calibre.Path = flags.calibrePath
-	}
-	if len(calibreArgs) > 0 {
-		cfg.Calibre.ExtraArgs = append(cfg.Calibre.ExtraArgs, calibreArgs...)
 	}
 }

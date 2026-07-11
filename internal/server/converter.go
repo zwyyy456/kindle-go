@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flashdict/kindle2flashdict/internal/converter"
 	txtapp "github.com/flashdict/kindle2flashdict/internal/txt2epub/app"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/calibre"
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
 
@@ -46,7 +46,11 @@ func convertFile(inputPath, outputPath, inputFormat string, baseCfg txtconfig.Co
 	if inputFormat == "txt" {
 		return txtapp.Run(inputPath, cfg, txtapp.Options{}, io.Discard)
 	} else {
-		return calibre.Convert(inputPath, outputPath, cfg)
+		return converter.EPUBToAZW3(inputPath, outputPath, converter.EPUBOptions{
+			DefaultLanguage: cfg.Language,
+			Title:           strings.TrimSpace(opts.Title),
+			Author:          strings.TrimSpace(opts.Author),
+		})
 	}
 }
 

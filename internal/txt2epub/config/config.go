@@ -31,7 +31,6 @@ type Config struct {
 	DropRegex      []string      `toml:"drop_regex" yaml:"drop_regex"`
 	Replace        []ReplaceRule `toml:"replace" yaml:"replace"`
 	Style          Style         `toml:"style" yaml:"style"`
-	Calibre        Calibre       `toml:"calibre" yaml:"calibre"`
 }
 
 type ReplaceRule struct {
@@ -44,12 +43,6 @@ type Style struct {
 	ParagraphIndent  string  `toml:"paragraph_indent" yaml:"paragraph_indent"`
 	ParagraphSpacing string  `toml:"paragraph_spacing" yaml:"paragraph_spacing"`
 	TextAlign        string  `toml:"text_align" yaml:"text_align"`
-}
-
-type Calibre struct {
-	Path          string   `toml:"path" yaml:"path"`
-	OutputProfile string   `toml:"output_profile" yaml:"output_profile"`
-	ExtraArgs     []string `toml:"extra_args" yaml:"extra_args"`
 }
 
 func Defaults() Config {
@@ -67,10 +60,6 @@ func Defaults() Config {
 			ParagraphIndent:  "2em",
 			ParagraphSpacing: "0",
 			TextAlign:        "justify",
-		},
-		Calibre: Calibre{
-			Path:          "ebook-convert",
-			OutputProfile: "kindle_pw3",
 		},
 	}
 }
@@ -142,12 +131,6 @@ func Normalize(cfg *Config) {
 	}
 	if cfg.Style.TextAlign == "" {
 		cfg.Style.TextAlign = "justify"
-	}
-	if cfg.Calibre.Path == "" {
-		cfg.Calibre.Path = "ebook-convert"
-	}
-	if cfg.Calibre.OutputProfile == "" {
-		cfg.Calibre.OutputProfile = "kindle_pw3"
 	}
 }
 

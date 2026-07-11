@@ -43,12 +43,12 @@ func printUsage(out *os.File) {
 
 Usage:
   %s vocab export [options]
-  %s txt2epub [options] input.txt
+	  %s txt2epub [options] input.txt|input.epub
   %s serve [options]
 
 Commands:
   vocab export  Export Kindle Vocabulary Builder records to FlashDict card JSON.
-  txt2epub      Convert a TXT book to EPUB or native AZW3.
+	  txt2epub      Convert TXT to EPUB/AZW3 or EPUB to native AZW3.
   serve         Run a LAN Web UI and Kindle download page.
 
 Run "%s <command> help" for command-specific usage.

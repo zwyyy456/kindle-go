@@ -21,8 +21,6 @@ func TestRunWritesAZW3WithoutCalibre(t *testing.T) {
 	cfg.Output = output
 	cfg.Title = "测试书"
 	cfg.Author = "作者"
-	cfg.Calibre.Path = filepath.Join(dir, "missing-ebook-convert")
-
 	var stdout bytes.Buffer
 	if err := Run(input, cfg, Options{}, &stdout); err != nil {
 		t.Fatal(err)
