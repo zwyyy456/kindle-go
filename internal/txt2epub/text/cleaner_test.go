@@ -4,13 +4,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
+	"github.com/flashdict/kindle2flashdict/internal/config"
 )
 
 func TestCleanDropReplaceAndMerge(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.DropRegex = []string{`^广告`}
-	cfg.Replace = []config.ReplaceRule{{Pattern: `　+`, With: " "}}
+	cfg.TXT.DropRegex = []string{`^广告`}
+	cfg.TXT.Replace = []config.ReplaceRule{{Pattern: `　+`, With: " "}}
 
 	cleaner, err := NewCleaner(cfg)
 	if err != nil {

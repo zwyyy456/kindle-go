@@ -11,9 +11,13 @@ The implementation keeps everything in one Go CLI binary.
 ## Project Layout
 
 - `main.go`: top-level CLI dispatch only.
+- `internal/config`: versioned toolbox configuration grouped by responsibility.
+- `internal/converter`: format validation and conversion orchestration shared by CLI and Web.
 - `internal/vocab`: Kindle Vocabulary Builder to FlashDict export workflow.
 - `internal/vocab/cmd`: `vocab` command-line flags and compatibility entrypoints.
-- `internal/txt2epub`: TXT cleaning, chapter parsing, EPUB writing, and native AZW3 output.
+- `internal/txt2epub`: TXT cleaning and chapter parsing.
+- `internal/epub`: shared EPUB reader and writer.
+- `internal/azw3`: native AZW3/KF8 writer.
 - `internal/txt2epub/cmd`: `txt2epub` command-line flags.
 - `internal/server`: local upload library, conversion Web UI, and Kindle download page.
 - `internal/server/cmd`: `serve` command-line flags.
@@ -54,6 +58,22 @@ For debugging, `sense_source.socket_path` can be set in the config to bypass dis
 
 ## TXT to EPUB
 
+Copy the grouped configuration file and adjust it for the book or server:
+
+```sh
+cp kindle-go.example.toml kindle-go.toml
+```
+
+The configuration format is versioned and grouped by responsibility:
+
+- `[metadata]`: title, author, and default language.
+- `[output]`: output format/path and generated TXT cover.
+- `[txt]`: chapter detection, cleanup, and replacement rules.
+- `[style]`: default reflowable text styling.
+- `[server]`: Web UI addresses and library directory.
+
+Unknown fields and the former top-level configuration fields are rejected.
+
 Preview table-of-contents matching:
 
 ```sh
@@ -87,8 +107,11 @@ The native EPUB reader currently covers metadata, OPF manifest/spine/guide, EPUB
 Run a local upload/conversion server:
 
 ```sh
-go run . serve --config txt2epub.toml
+go run . serve --config kindle-go.toml
 ```
+
+Values in `[server]` provide the defaults. `--web-addr`, `--kindle-addr`, and
+`--library` explicitly override them.
 
 Defaults:
 

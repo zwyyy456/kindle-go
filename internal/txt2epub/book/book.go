@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
+	"github.com/flashdict/kindle2flashdict/internal/config"
 	txt "github.com/flashdict/kindle2flashdict/internal/txt2epub/text"
 )
 
@@ -63,11 +63,11 @@ type Parser struct {
 }
 
 func NewParser(cfg config.Config) (*Parser, error) {
-	h1, err := regexp.Compile(cfg.H1Regex)
+	h1, err := regexp.Compile(cfg.TXT.H1Regex)
 	if err != nil {
 		return nil, fmt.Errorf("compile h1_regex: %w", err)
 	}
-	h2, err := regexp.Compile(cfg.H2Regex)
+	h2, err := regexp.Compile(cfg.TXT.H2Regex)
 	if err != nil {
 		return nil, fmt.Errorf("compile h2_regex: %w", err)
 	}
@@ -101,7 +101,7 @@ func (p *Parser) Build(lines []string, cfg config.Config, textStats txt.Stats) (
 	}
 
 	splitLevel := 1
-	if cfg.SplitLevel >= 2 && stats.H2Count > 0 {
+	if cfg.TXT.SplitLevel >= 2 && stats.H2Count > 0 {
 		splitLevel = 2
 	}
 	sections, headings := splitBlocks(blocks, splitLevel)
@@ -115,10 +115,10 @@ func (p *Parser) Build(lines []string, cfg config.Config, textStats txt.Stats) (
 
 	stats.SectionCount = len(sections)
 	book := Book{
-		Title:          cfg.Title,
-		Author:         cfg.Author,
-		Language:       cfg.Language,
-		Cover:          cfg.Cover,
+		Title:          cfg.Metadata.Title,
+		Author:         cfg.Metadata.Author,
+		Language:       cfg.Metadata.Language,
+		Cover:          cfg.Output.Cover,
 		Style:          cfg.Style,
 		Sections:       sections,
 		Headings:       headings,

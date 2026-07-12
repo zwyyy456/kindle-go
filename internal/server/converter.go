@@ -1,16 +1,15 @@
 package server
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/converter"
-	txtapp "github.com/flashdict/kindle2flashdict/internal/txt2epub/app"
-	txtconfig "github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
 
 type ConvertOptions struct {
@@ -28,30 +27,31 @@ type ConvertOptions struct {
 	TextAlign        string
 }
 
-func convertFile(inputPath, outputPath, inputFormat string, baseCfg txtconfig.Config, opts ConvertOptions) error {
+func convertFile(ctx context.Context, inputPath, outputPath, inputFormat string, baseCfg txtconfig.Config, opts ConvertOptions) error {
 	format := outputFormat(opts.Format)
 	if format != "azw3" && format != "epub" {
 		return fmt.Errorf("unsupported output format %q", opts.Format)
 	}
 
 	inputFormat = strings.ToLower(inputFormat)
-	if inputFormat == "epub" && format != "azw3" {
-		return fmt.Errorf("epub input can only be converted to azw3")
-	}
 	if inputFormat != "txt" && inputFormat != "epub" {
 		return fmt.Errorf("%s files are not convertible", inputFormat)
 	}
 
 	cfg := configFor(inputPath, outputPath, baseCfg, opts)
-	if inputFormat == "txt" {
-		return txtapp.Run(inputPath, cfg, txtapp.Options{}, io.Discard)
-	} else {
-		return converter.EPUBToAZW3(inputPath, outputPath, converter.EPUBOptions{
-			DefaultLanguage: cfg.Language,
-			Title:           strings.TrimSpace(opts.Title),
-			Author:          strings.TrimSpace(opts.Author),
-		})
+	metadata := converter.MetadataOverrides{Title: cfg.Metadata.Title, Author: cfg.Metadata.Author, Language: cfg.Metadata.Language}
+	if inputFormat == "epub" {
+		metadata.Title = strings.TrimSpace(opts.Title)
+		metadata.Author = strings.TrimSpace(opts.Author)
+		metadata.Language = ""
 	}
+	_, err := converter.Convert(ctx, converter.Request{
+		InputPath: inputPath, OutputPath: outputPath,
+		InputFormat: converter.Format(inputFormat), OutputFormat: converter.Format(format),
+		Metadata: metadata, DefaultLanguage: cfg.Metadata.Language,
+		TXTConfig: cfg,
+	})
+	return err
 }
 
 func outputFormat(format string) string {
@@ -64,27 +64,27 @@ func outputFormat(format string) string {
 
 func configFor(inputPath, outputPath string, baseCfg txtconfig.Config, opts ConvertOptions) txtconfig.Config {
 	cfg := baseCfg
-	cfg.Output = outputPath
-	cfg.Format = outputFormat(opts.Format)
+	cfg.Output.Path = outputPath
+	cfg.Output.Format = outputFormat(opts.Format)
 	if strings.TrimSpace(opts.Title) != "" {
-		cfg.Title = strings.TrimSpace(opts.Title)
+		cfg.Metadata.Title = strings.TrimSpace(opts.Title)
 	} else {
-		cfg.Title = strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
+		cfg.Metadata.Title = strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
 	}
 	if strings.TrimSpace(opts.Author) != "" {
-		cfg.Author = strings.TrimSpace(opts.Author)
+		cfg.Metadata.Author = strings.TrimSpace(opts.Author)
 	}
 	if strings.TrimSpace(opts.Language) != "" {
-		cfg.Language = strings.TrimSpace(opts.Language)
+		cfg.Metadata.Language = strings.TrimSpace(opts.Language)
 	}
 	if strings.TrimSpace(opts.H1Regex) != "" {
-		cfg.H1Regex = opts.H1Regex
+		cfg.TXT.H1Regex = opts.H1Regex
 	}
 	if strings.TrimSpace(opts.H2Regex) != "" {
-		cfg.H2Regex = opts.H2Regex
+		cfg.TXT.H2Regex = opts.H2Regex
 	}
 	if opts.SplitLevel > 0 {
-		cfg.SplitLevel = opts.SplitLevel
+		cfg.TXT.SplitLevel = opts.SplitLevel
 	}
 	if opts.LineHeight > 0 {
 		cfg.Style.LineHeight = opts.LineHeight

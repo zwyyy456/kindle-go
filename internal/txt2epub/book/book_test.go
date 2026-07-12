@@ -3,7 +3,7 @@ package book
 import (
 	"testing"
 
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
+	"github.com/flashdict/kindle2flashdict/internal/config"
 	txt "github.com/flashdict/kindle2flashdict/internal/txt2epub/text"
 )
 

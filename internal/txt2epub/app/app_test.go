@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
+	"github.com/flashdict/kindle2flashdict/internal/config"
 )
 
 func TestRunWritesAZW3WithoutCalibre(t *testing.T) {
@@ -17,10 +17,10 @@ func TestRunWritesAZW3WithoutCalibre(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Defaults()
-	cfg.Format = "azw3"
-	cfg.Output = output
-	cfg.Title = "测试书"
-	cfg.Author = "作者"
+	cfg.Output.Format = "azw3"
+	cfg.Output.Path = output
+	cfg.Metadata.Title = "测试书"
+	cfg.Metadata.Author = "作者"
 	var stdout bytes.Buffer
 	if err := Run(input, cfg, Options{}, &stdout); err != nil {
 		t.Fatal(err)

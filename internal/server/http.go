@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	txtconfig "github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
+	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 )
 
 const recentWindow = 24 * time.Hour
@@ -117,7 +117,8 @@ func (h Handler) handleConvert(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
-	if err := convertFile(inputPath, outputPath, inputFile.Format, h.BaseConfig, opts); err != nil {
+	if err := convertFile(r.Context(), inputPath, outputPath, inputFile.Format, h.BaseConfig, opts); err != nil {
+		_ = os.Remove(outputPath)
 		_ = h.Library.SetError(record.ID, err)
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
@@ -129,6 +130,7 @@ func (h Handler) handleConvert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Library.AddConverted(record.ID, outputName, relPath, info.Size(), now); err != nil {
+		_ = os.Remove(outputPath)
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}

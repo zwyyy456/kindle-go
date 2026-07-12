@@ -1,15 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 
+	"github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/converter"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/app"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
 
 type stringList []string
@@ -76,38 +76,32 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	})
 	applyCLI(&cfg, flags, dropRegex, replaceRegex, visited)
 	input := fs.Arg(0)
+	inputFormat := converter.FormatTXT
 	if strings.EqualFold(filepath.Ext(input), ".epub") {
-		if flags.preview {
-			return fmt.Errorf("preview is only supported for TXT input")
-		}
+		inputFormat = converter.FormatEPUB
 		if !visited["format"] {
-			cfg.Format = "azw3"
+			cfg.Output.Format = "azw3"
 		}
-		config.Normalize(&cfg)
-		if cfg.Format != "azw3" {
-			return fmt.Errorf("EPUB input can only be converted to AZW3")
-		}
-		output := config.OutputPath(input, cfg)
-		if !strings.EqualFold(filepath.Ext(output), ".azw3") {
-			return fmt.Errorf("EPUB conversion output must use .azw3 extension")
-		}
-		if err := converter.EPUBToAZW3(input, output, converter.EPUBOptions{
-			DefaultLanguage: cfg.Language,
-			Title:           cfg.Title,
-			Author:          cfg.Author,
-		}); err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "wrote %s\n", output)
-		return nil
 	}
 	config.Normalize(&cfg)
-
-	return app.Run(input, cfg, app.Options{
-		ConfigPath: flags.configPath,
-		Preview:    flags.preview,
-		Verbose:    flags.verbose,
-	}, stdout)
+	output := config.OutputPath(input, cfg)
+	if inputFormat == converter.FormatTXT && strings.EqualFold(filepath.Ext(output), ".azw3") {
+		cfg.Output.Format = "azw3"
+	}
+	metadata := converter.MetadataOverrides{Title: cfg.Metadata.Title, Author: cfg.Metadata.Author}
+	if inputFormat == converter.FormatTXT {
+		metadata.Language = cfg.Metadata.Language
+	}
+	_, err = converter.Convert(context.Background(), converter.Request{
+		InputPath: input, OutputPath: output,
+		InputFormat: inputFormat, OutputFormat: converter.Format(cfg.Output.Format),
+		Metadata: metadata, DefaultLanguage: cfg.Metadata.Language,
+		TXTConfig: cfg, Preview: flags.preview, Verbose: flags.verbose, Stdout: stdout,
+	})
+	if err == nil && inputFormat == converter.FormatEPUB {
+		fmt.Fprintf(stdout, "wrote %s\n", output)
+	}
+	return err
 }
 
 type cliFlags struct {
@@ -129,46 +123,46 @@ type cliFlags struct {
 
 func applyCLI(cfg *config.Config, flags cliFlags, dropRegex, replaceRegex []string, visited map[string]bool) {
 	if visited["o"] || visited["output"] {
-		cfg.Output = flags.output
+		cfg.Output.Path = flags.output
 	}
 	if visited["title"] {
-		cfg.Title = flags.title
+		cfg.Metadata.Title = flags.title
 	}
 	if visited["author"] {
-		cfg.Author = flags.author
+		cfg.Metadata.Author = flags.author
 	}
 	if visited["language"] {
-		cfg.Language = flags.language
+		cfg.Metadata.Language = flags.language
 	}
 	if visited["h1-regex"] {
-		cfg.H1Regex = flags.h1Regex
+		cfg.TXT.H1Regex = flags.h1Regex
 	}
 	if visited["h2-regex"] {
-		cfg.H2Regex = flags.h2Regex
+		cfg.TXT.H2Regex = flags.h2Regex
 	}
 	if visited["format"] {
-		cfg.Format = flags.format
+		cfg.Output.Format = flags.format
 	}
 	if visited["split-level"] {
-		cfg.SplitLevel = flags.splitLevel
+		cfg.TXT.SplitLevel = flags.splitLevel
 	}
 	if visited["no-cover"] {
-		cfg.Cover = false
+		cfg.Output.Cover = false
 	}
 	if visited["no-merge-lines"] {
-		cfg.MergeLines = false
+		cfg.TXT.MergeLines = false
 	}
 	if visited["no-trim-blank-lines"] {
-		cfg.TrimBlankLines = false
+		cfg.TXT.TrimBlankLines = false
 	}
 	if len(dropRegex) > 0 {
-		cfg.DropRegex = append(cfg.DropRegex, dropRegex...)
+		cfg.TXT.DropRegex = append(cfg.TXT.DropRegex, dropRegex...)
 	}
 	for _, raw := range replaceRegex {
 		pattern, with, ok := strings.Cut(raw, "=")
 		if !ok {
 			pattern, with = raw, ""
 		}
-		cfg.Replace = append(cfg.Replace, config.ReplaceRule{Pattern: pattern, With: with})
+		cfg.TXT.Replace = append(cfg.TXT.Replace, config.ReplaceRule{Pattern: pattern, With: with})
 	}
 }

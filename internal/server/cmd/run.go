@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"io"
 
+	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/server"
-	txtconfig "github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
 
 func Run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	webAddr := fs.String("web-addr", ":8787", "address for the desktop Web UI")
-	kindleAddr := fs.String("kindle-addr", ":8788", "address for the Kindle download page")
-	libraryDir := fs.String("library", "kindle-go-library", "library directory for uploads and converted files")
-	configPath := fs.String("config", "", "txt2epub config file path (.toml, .yaml, .yml)")
+	webAddr := fs.String("web-addr", "", "override address for the desktop Web UI")
+	kindleAddr := fs.String("kindle-addr", "", "override address for the Kindle download page")
+	libraryDir := fs.String("library", "", "override library directory for uploads and converted files")
+	configPath := fs.String("config", "", "toolbox config file path (.toml, .yaml, .yml)")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: serve [options]")
 		fmt.Fprintln(stderr)
@@ -40,6 +40,17 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	txtconfig.Normalize(&baseCfg)
+	visited := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	if !visited["web-addr"] {
+		*webAddr = baseCfg.Server.WebAddr
+	}
+	if !visited["kindle-addr"] {
+		*kindleAddr = baseCfg.Server.KindleAddr
+	}
+	if !visited["library"] {
+		*libraryDir = baseCfg.Server.LibraryDir
+	}
 
 	library, err := server.NewLibrary(*libraryDir)
 	if err != nil {

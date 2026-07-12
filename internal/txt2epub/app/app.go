@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/flashdict/kindle2flashdict/internal/azw3"
+	"github.com/flashdict/kindle2flashdict/internal/config"
+	"github.com/flashdict/kindle2flashdict/internal/epub"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/book"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/epub"
 	txt "github.com/flashdict/kindle2flashdict/internal/txt2epub/text"
 )
 
@@ -25,8 +25,8 @@ func Run(input string, cfg config.Config, opts Options, stdout io.Writer) error 
 		return err
 	}
 
-	if cfg.Title == "" {
-		cfg.Title = strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
+	if cfg.Metadata.Title == "" {
+		cfg.Metadata.Title = strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
 	}
 	config.Normalize(&cfg)
 
@@ -52,21 +52,22 @@ func Run(input string, cfg config.Config, opts Options, stdout io.Writer) error 
 	}
 
 	output := config.OutputPath(input, cfg)
-	format := cfg.Format
+	ebookBook := book.ToEBook(b)
+	format := cfg.Output.Format
 	if strings.EqualFold(filepath.Ext(output), ".azw3") {
 		format = "azw3"
 	}
 	switch format {
 	case "epub":
-		if err := epub.Write(output, b); err != nil {
+		if err := epub.Write(output, ebookBook); err != nil {
 			return err
 		}
 	case "azw3":
-		if err := azw3.Write(output, book.ToEBook(b), azw3.Options{}); err != nil {
+		if err := azw3.Write(output, ebookBook, azw3.Options{}); err != nil {
 			return err
 		}
 	default:
-		return fmt.Errorf("unsupported format %q", cfg.Format)
+		return fmt.Errorf("unsupported format %q", cfg.Output.Format)
 	}
 
 	if opts.Verbose {

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/book"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
 
 func TestWriteEPUBStructure(t *testing.T) {
@@ -28,7 +28,7 @@ func TestWriteEPUBStructure(t *testing.T) {
 		}},
 		Headings: []book.Heading{{ID: "heading-001", Title: "第一章 开始", Level: 2, SectionID: "chapter-001"}},
 	}
-	if err := Write(out, b); err != nil {
+	if err := Write(out, book.ToEBook(b)); err != nil {
 		t.Fatal(err)
 	}
 	zr, err := zip.OpenReader(out)
@@ -61,5 +61,12 @@ func TestWriteEPUBStructure(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing %s", name)
 		}
+	}
+	roundTripped, err := Read(out, Options{})
+	if err != nil {
+		t.Fatalf("read written EPUB: %v", err)
+	}
+	if roundTripped.Metadata.Title != "测试书" || len(roundTripped.Spine) != 2 || len(roundTripped.TOC) != 1 {
+		t.Fatalf("round trip metadata/spine/TOC = %#v/%d/%d", roundTripped.Metadata, len(roundTripped.Spine), len(roundTripped.TOC))
 	}
 }

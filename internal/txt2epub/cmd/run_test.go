@@ -26,6 +26,26 @@ func TestRunConvertsEPUBToAZW3(t *testing.T) {
 	}
 }
 
+func TestRunInfersAZW3FromOutputExtension(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "book.txt")
+	output := filepath.Join(dir, "book.azw3")
+	if err := os.WriteFile(input, []byte("第1章 开始\n正文。"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Run([]string{"-o", output, input}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run: %v, stderr=%s", err, stderr.String())
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("MOBI")) {
+		t.Fatal(".azw3 output did not select AZW3 writer")
+	}
+}
+
 func writeCommandEPUBFixture(t *testing.T, filename string) {
 	t.Helper()
 	file, err := os.Create(filename)

@@ -3,8 +3,8 @@ package book
 import (
 	"testing"
 
+	"github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/ebook"
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
 )
 
 func TestToEBookBuildsSpineAndBodyTree(t *testing.T) {

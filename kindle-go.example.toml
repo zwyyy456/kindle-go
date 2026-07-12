@@ -1,0 +1,37 @@
+version = 1
+
+[metadata]
+title = "书名"
+author = "作者"
+language = "zh-CN"
+
+[output]
+format = "azw3"
+path = ""
+cover = true
+
+[txt]
+h1_regex = '^\s*(第[一二三四五六七八九十百千万零〇两\d]+[卷部集篇]).*$'
+h2_regex = '^\s*(第[一二三四五六七八九十百千万零〇两\d]+[章节回]).*$'
+merge_lines = true
+trim_blank_lines = true
+split_level = 2
+drop_regex = [
+  '^\s*请收藏本站.*$',
+  '^\s*最新网址.*$',
+]
+
+[[txt.replace]]
+pattern = '　+'
+with = ' '
+
+[style]
+line_height = 1.7
+paragraph_indent = "2em"
+paragraph_spacing = "0"
+text_align = "justify"
+
+[server]
+web_addr = ":8787"
+kindle_addr = ":8788"
+library_dir = "kindle-go-library"

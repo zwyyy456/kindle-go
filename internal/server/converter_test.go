@@ -3,11 +3,12 @@ package server
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
-	txtconfig "github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
+	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 )
 
 func TestConvertFileUsesNativeEPUBReaderWithoutCalibre(t *testing.T) {
@@ -16,7 +17,7 @@ func TestConvertFileUsesNativeEPUBReaderWithoutCalibre(t *testing.T) {
 	writeServerEPUBFixture(t, input)
 	output := filepath.Join(dir, "book.azw3")
 	cfg := txtconfig.Defaults()
-	if err := convertFile(input, output, "epub", cfg, ConvertOptions{Format: "azw3"}); err != nil {
+	if err := convertFile(context.Background(), input, output, "epub", cfg, ConvertOptions{Format: "azw3"}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(output)

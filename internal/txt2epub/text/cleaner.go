@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/flashdict/kindle2flashdict/internal/txt2epub/config"
+	"github.com/flashdict/kindle2flashdict/internal/config"
 )
 
 type Stats struct {
@@ -28,7 +28,7 @@ type replaceRule struct {
 
 func NewCleaner(cfg config.Config) (*Cleaner, error) {
 	c := &Cleaner{}
-	for _, pattern := range cfg.DropRegex {
+	for _, pattern := range cfg.TXT.DropRegex {
 		if strings.TrimSpace(pattern) == "" {
 			continue
 		}
@@ -38,7 +38,7 @@ func NewCleaner(cfg config.Config) (*Cleaner, error) {
 		}
 		c.drop = append(c.drop, re)
 	}
-	for _, rule := range cfg.Replace {
+	for _, rule := range cfg.TXT.Replace {
 		if strings.TrimSpace(rule.Pattern) == "" {
 			continue
 		}
@@ -68,7 +68,7 @@ func (c *Cleaner) Clean(input string, cfg config.Config, isHeading func(string) 
 		}
 		if line == "" {
 			stats.BlankLines++
-			if cfg.TrimBlankLines {
+			if cfg.TXT.TrimBlankLines {
 				if previousBlank {
 					continue
 				}
@@ -81,7 +81,7 @@ func (c *Cleaner) Clean(input string, cfg config.Config, isHeading func(string) 
 		lines = append(lines, line)
 	}
 
-	if cfg.MergeLines {
+	if cfg.TXT.MergeLines {
 		var merged int
 		lines, merged = mergeHardWrappedLines(lines, isHeading)
 		stats.MergedLines = merged

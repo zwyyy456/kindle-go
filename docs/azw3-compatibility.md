@@ -25,7 +25,7 @@ Calibre 最终会删除这些未使用的 `.unknown` 项并正常输出 EPUB。�
 ### 复现
 
 ```sh
-go run . txt2epub --config txt2epub.toml --format azw3 \
+go run . txt2epub --config kindle-go.toml --format azw3 \
   -o /tmp/kindle-go-test.azw3 input.txt
 
 ebook-convert \
