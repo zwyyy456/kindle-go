@@ -99,9 +99,11 @@ func (l *Library) AddUpload(name string, r io.Reader, now time.Time) (Record, er
 	size, copyErr := io.Copy(out, r)
 	closeErr := out.Close()
 	if copyErr != nil {
+		_ = os.Remove(absPath)
 		return Record{}, copyErr
 	}
 	if closeErr != nil {
+		_ = os.Remove(absPath)
 		return Record{}, closeErr
 	}
 
@@ -119,6 +121,8 @@ func (l *Library) AddUpload(name string, r io.Reader, now time.Time) (Record, er
 	}
 	l.index.Records = append(l.index.Records, record)
 	if err := l.saveLocked(); err != nil {
+		l.index.Records = l.index.Records[:len(l.index.Records)-1]
+		_ = os.Remove(absPath)
 		return Record{}, err
 	}
 	return record, nil
@@ -136,6 +140,8 @@ func (l *Library) AddConverted(recordID, name, relPath string, size int64, now t
 	if !ok {
 		return fmt.Errorf("record %q not found", recordID)
 	}
+	previousOutput := record.Output
+	previousError := record.LastError
 	record.Output = FileEntry{
 		Name:      safeFileName(name),
 		RelPath:   filepath.ToSlash(relPath),
@@ -144,7 +150,12 @@ func (l *Library) AddConverted(recordID, name, relPath string, size int64, now t
 		CreatedAt: now,
 	}
 	record.LastError = ""
-	return l.saveLocked()
+	if err := l.saveLocked(); err != nil {
+		record.Output = previousOutput
+		record.LastError = previousError
+		return err
+	}
+	return nil
 }
 
 func (l *Library) SetError(recordID string, err error) error {
@@ -155,12 +166,17 @@ func (l *Library) SetError(recordID string, err error) error {
 	if !ok {
 		return fmt.Errorf("record %q not found", recordID)
 	}
+	previous := record.LastError
 	if err == nil {
 		record.LastError = ""
 	} else {
 		record.LastError = err.Error()
 	}
-	return l.saveLocked()
+	if saveErr := l.saveLocked(); saveErr != nil {
+		record.LastError = previous
+		return saveErr
+	}
+	return nil
 }
 
 func (l *Library) Record(id string) (Record, bool) {

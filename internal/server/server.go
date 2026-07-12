@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -21,6 +24,10 @@ type Server struct {
 }
 
 func (s Server) Run() error {
+	return s.RunContext(context.Background())
+}
+
+func (s Server) RunContext(ctx context.Context) error {
 	webAddr := s.Config.WebAddr
 	if webAddr == "" {
 		webAddr = ":8787"
@@ -33,14 +40,29 @@ func (s Server) Run() error {
 		printURLs(s.Stdout, webAddr, kindleAddr)
 	}
 
+	webServer := &http.Server{Addr: webAddr, Handler: s.Handler.WebMux()}
+	kindleServer := &http.Server{Addr: kindleAddr, Handler: s.Handler.KindleMux()}
 	errCh := make(chan error, 2)
 	go func() {
-		errCh <- http.ListenAndServe(webAddr, s.Handler.WebMux())
+		errCh <- webServer.ListenAndServe()
 	}()
 	go func() {
-		errCh <- http.ListenAndServe(kindleAddr, s.Handler.KindleMux())
+		errCh <- kindleServer.ListenAndServe()
 	}()
-	return <-errCh
+	var runErr error
+	select {
+	case <-ctx.Done():
+		runErr = ctx.Err()
+	case runErr = <-errCh:
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = webServer.Shutdown(shutdownCtx)
+	_ = kindleServer.Shutdown(shutdownCtx)
+	if errors.Is(runErr, http.ErrServerClosed) {
+		return nil
+	}
+	return runErr
 }
 
 func printURLs(w io.Writer, webAddr, kindleAddr string) {
