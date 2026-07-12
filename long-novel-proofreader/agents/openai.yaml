@@ -1,0 +1,4 @@
+interface:
+  display_name: "长篇小说保守校对"
+  short_description: "用模型通读、双重复核并可恢复地校对长篇小说"
+  default_prompt: "Use $long-novel-proofreader to model-review this entire Chinese TXT novel in resumable batches, independently verify edits, and produce an auditable revised copy."
