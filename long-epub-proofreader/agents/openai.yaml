@@ -1,0 +1,4 @@
+interface:
+  display_name: "EPUB 长篇小说校对"
+  short_description: "保守校对长篇 EPUB，保留原结构并提供完整可审计记录"
+  default_prompt: "Use $long-epub-proofreader to conservatively proofread this EPUB and produce a revised copy with an audit report."
