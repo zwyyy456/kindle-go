@@ -46,7 +46,7 @@ func TestEPUBReaderToAZW3NavigationTargetsRealChunks(t *testing.T) {
 	if !bytes.Contains(raw, []byte("第二章")) || !bytes.Contains(raw, []byte(`aid="`+target.aid+`"`)) {
 		t.Fatalf("target chunk does not contain second chapter target: %q", raw)
 	}
-	for _, want := range []string{"EPUB 集成测试", "测试作者", "zh-CN"} {
+	for _, want := range []string{"EPUB 集成测试", "测试作者", "zh"} {
 		if !bytes.Contains(records[0], []byte(want)) {
 			t.Fatalf("header missing metadata %q", want)
 		}

@@ -105,10 +105,12 @@ func writeUint32(w *bytes.Buffer, value uint32) {
 
 func languageCode(language string) uint32 {
 	switch language {
-	case "zh", "zh-CN", "zho", "chi":
+	case "zh-CN":
 		return 0x0804
+	case "zh", "zho", "chi":
+		return 0x0004
 	case "zh-TW":
-		return 0x0404
+		return 0x0004
 	case "en", "en-US":
 		return 0x0409
 	default:

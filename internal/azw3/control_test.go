@@ -21,3 +21,19 @@ func TestFCISUsesCanonicalKF8Layout(t *testing.T) {
 		}
 	}
 }
+func TestLanguageCodeDistinguishesSimplifiedChineseLocale(t *testing.T) {
+	tests := []struct {
+		language string
+		want     uint32
+	}{
+		{language: "zh-CN", want: 0x0804},
+		{language: "zh", want: 0x0004},
+	}
+	for _, tt := range tests {
+		t.Run(tt.language, func(t *testing.T) {
+			if got := languageCode(tt.language); got != tt.want {
+				t.Fatalf("languageCode(%q) = %#x, want %#x", tt.language, got, tt.want)
+			}
+		})
+	}
+}

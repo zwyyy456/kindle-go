@@ -2,10 +2,9 @@ package azw3
 
 import (
 	"bytes"
+	"fmt"
 	"io"
-	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 const palmEpochDelta = 2082844800
@@ -18,7 +17,8 @@ func writePalmDB(w io.Writer, title string, records []record) error {
 	for i, record := range records {
 		writeUint32(&out, uint32(offset))
 		out.WriteByte(0)
-		out.Write([]byte{byte(i >> 16), byte(i >> 8), byte(i)})
+		uid := i * 2
+		out.Write([]byte{byte(uid >> 16), byte(uid >> 8), byte(uid)})
 		offset += len(record.data)
 	}
 	writeUint16(&out, 0)
@@ -45,22 +45,15 @@ func writePalmHeader(w *bytes.Buffer, title string, recordCount int) {
 	writeUint32(w, 0)
 	w.WriteString("BOOK")
 	w.WriteString("MOBI")
-	writeUint32(w, 0)
+	uniqueIDSeed := uint32(1)
+	if recordCount > 0 {
+		uniqueIDSeed = uint32(2*recordCount - 1)
+	}
+	writeUint32(w, uniqueIDSeed)
 	writeUint32(w, 0)
 	writeUint16(w, uint16(recordCount))
 }
 
 func palmName(title string) string {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		title = "Untitled"
-	}
-	for len([]byte(title)) > 31 {
-		_, size := utf8.DecodeLastRuneInString(title)
-		if size <= 0 {
-			break
-		}
-		title = title[:len(title)-size]
-	}
-	return title
+	return fmt.Sprintf("kindle-go-%08x", stableID(title))
 }

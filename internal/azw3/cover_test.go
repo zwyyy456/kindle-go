@@ -38,9 +38,40 @@ func TestCoverCreatesTitlePageAndEXTHOffset(t *testing.T) {
 	if compiled.coverResourceOffset != 1 {
 		t.Fatalf("cover offset = %d", compiled.coverResourceOffset)
 	}
-	exth := buildEXTH(compiled.metadata, compiled.coverResourceOffset)
+	exth := buildEXTH(compiled.metadata, compiled.coverResourceOffset, len(compiled.resources))
 	if got, ok := exthUint32(exth, 201); !ok || got != 1 {
 		t.Fatalf("EXTH 201 = %d, %v", got, ok)
+	}
+}
+
+func TestEXTHDeclaresCalibreCompatibleEBOKMetadata(t *testing.T) {
+	meta := ebook.Metadata{Title: "Book", Author: "Author", Language: "zh-CN", Identifier: "book-id"}
+	exth := buildEXTH(meta, nullIndex, 7)
+	asin, ok := exthString(exth, 113)
+	if !ok || asin == "" {
+		t.Fatalf("EXTH 113 ASIN = %q, %v; want a generated UUID", asin, ok)
+	}
+	if len(asin) != 36 || asin[8] != '-' || asin[13] != '-' || asin[18] != '-' || asin[23] != '-' {
+		t.Fatalf("EXTH 113 ASIN = %q, want UUID text", asin)
+	}
+	for typ, want := range map[uint32]string{
+		112: "kindle-go:" + asin,
+		501: "EBOK",
+		503: "Book",
+		524: "zh",
+		528: "true",
+	} {
+		if got, ok := exthString(exth, typ); !ok || got != want {
+			t.Fatalf("EXTH %d = %q, %v; want %q", typ, got, ok, want)
+		}
+	}
+	if got, ok := exthUint32(exth, 125); !ok || got != 7 {
+		t.Fatalf("EXTH 125 = %d, %v; want 7", got, ok)
+	}
+	declaredLength := int(binary.BigEndian.Uint32(exth[4:8]))
+	padding := exth[declaredLength:]
+	if len(padding) < 1 || len(padding) > 4 || !bytes.Equal(padding, make([]byte, len(padding))) {
+		t.Fatalf("EXTH padding = %x (declared length %d, total %d), want 1-4 zero bytes outside declared length", padding, declaredLength, len(exth))
 	}
 }
 
@@ -109,4 +140,18 @@ func exthUint32(exth []byte, wanted uint32) (uint32, bool) {
 		off += size
 	}
 	return 0, false
+}
+
+func exthString(exth []byte, wanted uint32) (string, bool) {
+	count := binary.BigEndian.Uint32(exth[8:12])
+	off := 12
+	for i := uint32(0); i < count; i++ {
+		typ := binary.BigEndian.Uint32(exth[off : off+4])
+		size := int(binary.BigEndian.Uint32(exth[off+4 : off+8]))
+		if typ == wanted {
+			return string(exth[off+8 : off+size]), true
+		}
+		off += size
+	}
+	return "", false
 }

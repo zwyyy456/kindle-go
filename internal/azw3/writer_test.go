@@ -52,7 +52,7 @@ func TestWritePalmDBMOBIWithMetadataTextAndTOC(t *testing.T) {
 	if got := binary.BigEndian.Uint16(records[0][0:2]); got != 2 {
 		t.Fatalf("PalmDOC compression = %d, want 2", got)
 	}
-	for _, want := range []string{"EXTH", "测试书", "作者", "zh-CN"} {
+	for _, want := range []string{"EXTH", "测试书", "作者", "zh"} {
 		if !bytes.Contains(records[0], []byte(want)) {
 			t.Fatalf("header record missing %q", want)
 		}
@@ -63,6 +63,9 @@ func TestWritePalmDBMOBIWithMetadataTextAndTOC(t *testing.T) {
 	header := inspectMOBIHeader(t, records[0])
 	if header.headerLength != 264 {
 		t.Fatalf("mobi header length = %d", header.headerLength)
+	}
+	if header.languageCode != 0x0804 {
+		t.Fatalf("MOBI language code = %#x, want zh-CN 0x0804", header.languageCode)
 	}
 	for name, idx := range map[string]uint32{
 		"chunk": header.chunkIndex,
@@ -142,6 +145,7 @@ func TestWriteSplitsLargeChineseTextOnUTF8Boundaries(t *testing.T) {
 type mobiHeader struct {
 	headerLength   uint32
 	firstNonText   uint32
+	languageCode   uint32
 	huffmanRecord  uint32
 	extraDataFlags uint16
 	fdstRecord     uint32
@@ -168,6 +172,7 @@ func inspectMOBIHeader(t *testing.T, record []byte) mobiHeader {
 	return mobiHeader{
 		headerLength:   u32(20),
 		firstNonText:   u32(80),
+		languageCode:   u32(92),
 		huffmanRecord:  u32(112),
 		extraDataFlags: binary.BigEndian.Uint16(record[242:244]),
 		fdstRecord:     u32(192),
