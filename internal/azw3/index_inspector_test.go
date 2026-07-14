@@ -9,12 +9,13 @@ import (
 )
 
 type inspectedMOBIHeader struct {
-	firstNonText   uint32
-	extraDataFlags uint16
-	ncxIndex       uint32
-	chunkIndex     uint32
-	skelIndex      uint32
-	guideIndex     uint32
+	textRecordCount uint16
+	firstNonText    uint32
+	extraDataFlags  uint16
+	ncxIndex        uint32
+	chunkIndex      uint32
+	skelIndex       uint32
+	guideIndex      uint32
 }
 
 type inspectedTag struct {
@@ -128,12 +129,13 @@ func inspectAZW3MOBIHeader(t *testing.T, record []byte) inspectedMOBIHeader {
 		return binary.BigEndian.Uint32(record[recordOffset : recordOffset+4])
 	}
 	return inspectedMOBIHeader{
-		firstNonText:   u32(80),
-		extraDataFlags: binary.BigEndian.Uint16(record[242:244]),
-		ncxIndex:       u32(244),
-		chunkIndex:     u32(248),
-		skelIndex:      u32(252),
-		guideIndex:     u32(260),
+		textRecordCount: binary.BigEndian.Uint16(record[8:10]),
+		firstNonText:    u32(80),
+		extraDataFlags:  binary.BigEndian.Uint16(record[242:244]),
+		ncxIndex:        u32(244),
+		chunkIndex:      u32(248),
+		skelIndex:       u32(252),
+		guideIndex:      u32(260),
 	}
 }
 

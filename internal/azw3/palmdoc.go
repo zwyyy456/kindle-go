@@ -1,24 +1,29 @@
 package azw3
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+	"sort"
+)
 
 // compressPalmDOC encodes one independently decompressible PalmDOC text record.
-// Matches use the most recent three-byte prefix within the 2 KiB PalmDOC window.
+// Its match selection mirrors Calibre's conservative PalmDOC encoder: matches
+// are longest-first, most-recent-first, and never overlap the current position.
 func compressPalmDOC(src []byte) []byte {
 	if len(src) == 0 {
 		return nil
 	}
 	out := make([]byte, 0, len(src))
-	last := make(map[uint32]int, len(src))
+	positions := make(map[uint32][]int, len(src))
 	keyAt := func(pos int) (uint32, bool) {
 		if pos+2 >= len(src) {
 			return 0, false
 		}
 		return uint32(src[pos])<<16 | uint32(src[pos+1])<<8 | uint32(src[pos+2]), true
 	}
-	remember := func(pos int) {
+	for pos := range src {
 		if key, ok := keyAt(pos); ok {
-			last[key] = pos
+			positions[key] = append(positions[key], pos)
 		}
 	}
 	matchAt := func(pos int) (distance, length int) {
@@ -26,56 +31,61 @@ func compressPalmDOC(src []byte) []byte {
 		if !ok {
 			return 0, 0
 		}
-		previous, ok := last[key]
-		if !ok || pos-previous > 2047 {
-			return 0, 0
+		candidates := positions[key]
+		for length = 10; length >= 3; length-- {
+			if pos+length > len(src) {
+				continue
+			}
+			// Starting at or before pos-length prevents the match source from
+			// overlapping bytes that have not yet been encoded.
+			last := sort.SearchInts(candidates, pos-length+1) - 1
+			for i := last; i >= 0; i-- {
+				previous := candidates[i]
+				distance = pos - previous
+				if distance > 2047 {
+					break
+				}
+				if bytes.Equal(src[previous:previous+length], src[pos:pos+length]) {
+					return distance, length
+				}
+			}
 		}
-		length = 3
-		for length < 10 && pos+length < len(src) && src[previous+length] == src[pos+length] {
-			length++
-		}
-		return pos - previous, length
+		return 0, 0
 	}
 
 	for pos := 0; pos < len(src); {
-		if pos+1 < len(src) && src[pos] == ' ' && src[pos+1] >= 0x40 && src[pos+1] <= 0x7f {
-			out = append(out, src[pos+1]^0x80)
-			remember(pos)
-			remember(pos + 1)
-			pos += 2
-			continue
-		}
-		if distance, length := matchAt(pos); length >= 3 {
-			code := uint16(0x8000 | distance<<3 | (length - 3))
-			out = append(out, byte(code>>8), byte(code))
-			for i := 0; i < length; i++ {
-				remember(pos + i)
+		if pos > 10 && len(src)-pos > 10 {
+			if distance, length := matchAt(pos); length >= 3 {
+				code := uint16(0x8000 | distance<<3 | (length - 3))
+				out = append(out, byte(code>>8), byte(code))
+				pos += length
+				continue
 			}
-			pos += length
+		}
+
+		current := src[pos]
+		pos++
+		if current == ' ' && pos < len(src) && src[pos] >= 0x40 && src[pos] <= 0x7f {
+			out = append(out, src[pos]^0x80)
+			pos++
 			continue
 		}
-		if src[pos] >= 0x09 && src[pos] <= 0x7f {
-			out = append(out, src[pos])
-			remember(pos)
-			pos++
+		if current == 0 || (current > 8 && current < 0x80) {
+			out = append(out, current)
 			continue
 		}
 
-		start := pos
-		for pos < len(src) && pos-start < 8 {
-			if pos > start {
-				if src[pos] >= 0x09 && src[pos] <= 0x7f {
-					break
-				}
-				if _, length := matchAt(pos); length >= 3 {
-					break
-				}
+		literal := []byte{current}
+		for pos < len(src) && len(literal) < 8 {
+			current = src[pos]
+			if current == 0 || (current > 8 && current < 0x80) {
+				break
 			}
-			remember(pos)
+			literal = append(literal, current)
 			pos++
 		}
-		out = append(out, byte(pos-start))
-		out = append(out, src[start:pos]...)
+		out = append(out, byte(len(literal)))
+		out = append(out, literal...)
 	}
 	return out
 }

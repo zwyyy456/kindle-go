@@ -9,14 +9,19 @@ func buildRecords(c compiledBook) ([]record, error) {
 	if err != nil {
 		return nil, err
 	}
-	records := make([]record, 0, len(c.records)+12)
+	records := make([]record, 0, len(c.records)+13)
 	records = append(records, record{})
+	compressedTextSize := 0
 	for _, chunk := range c.records {
 		data := compressPalmDOC(chunk.data)
 		data = append(data, chunk.overlap...)
 		data = append(data, byte(len(chunk.overlap)))
+		compressedTextSize += len(data)
 		data = append(data, encodeTrailingData(indexingTBS[len(records)-1])...)
 		records = append(records, record{data: data})
+	}
+	if padding := compressedTextSize % 4; padding != 0 {
+		records = append(records, record{data: make([]byte, padding)})
 	}
 	c.firstNonTextRecord = len(records)
 

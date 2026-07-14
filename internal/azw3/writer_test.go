@@ -57,7 +57,8 @@ func TestWritePalmDBMOBIWithMetadataTextAndTOC(t *testing.T) {
 			t.Fatalf("header record missing %q", want)
 		}
 	}
-	if !bytes.Contains(decompressTextRecords(t, records[1:int(inspectMOBIHeader(t, records[0]).firstNonText)]), []byte("正文。")) {
+	initialHeader := inspectMOBIHeader(t, records[0])
+	if !bytes.Contains(decompressTextRecords(t, records[1:1+int(initialHeader.textRecordCount)]), []byte("正文。")) {
 		t.Fatalf("text record missing paragraph: %q", records[1])
 	}
 	header := inspectMOBIHeader(t, records[0])
@@ -128,13 +129,13 @@ func TestWriteSplitsLargeChineseTextOnUTF8Boundaries(t *testing.T) {
 	if header.firstNonText <= 2 {
 		t.Fatalf("expected multiple text records, first non-text = %d", header.firstNonText)
 	}
-	for i := 1; i < int(header.firstNonText); i++ {
+	for i := 1; i <= int(header.textRecordCount); i++ {
 		decoded := decompressTextRecords(t, records[i:i+1])
-		if i < int(header.firstNonText)-1 && len(decoded) != 4096 {
+		if i < int(header.textRecordCount) && len(decoded) != 4096 {
 			t.Fatalf("text record %d decoded length = %d, want 4096", i, len(decoded))
 		}
 	}
-	if decoded := decompressTextRecords(t, records[1:int(header.firstNonText)]); !utf8.Valid(decoded) {
+	if decoded := decompressTextRecords(t, records[1:1+int(header.textRecordCount)]); !utf8.Valid(decoded) {
 		t.Fatal("reconstructed text is not valid UTF-8")
 	}
 	if header.extraDataFlags != 3 {
@@ -143,19 +144,20 @@ func TestWriteSplitsLargeChineseTextOnUTF8Boundaries(t *testing.T) {
 }
 
 type mobiHeader struct {
-	headerLength   uint32
-	firstNonText   uint32
-	languageCode   uint32
-	huffmanRecord  uint32
-	extraDataFlags uint16
-	fdstRecord     uint32
-	fdstCount      uint32
-	flisRecord     uint32
-	fcisRecord     uint32
-	ncxIndex       uint32
-	chunkIndex     uint32
-	skelIndex      uint32
-	guideIndex     uint32
+	textRecordCount uint16
+	headerLength    uint32
+	firstNonText    uint32
+	languageCode    uint32
+	huffmanRecord   uint32
+	extraDataFlags  uint16
+	fdstRecord      uint32
+	fdstCount       uint32
+	flisRecord      uint32
+	fcisRecord      uint32
+	ncxIndex        uint32
+	chunkIndex      uint32
+	skelIndex       uint32
+	guideIndex      uint32
 }
 
 func inspectMOBIHeader(t *testing.T, record []byte) mobiHeader {
@@ -170,19 +172,20 @@ func inspectMOBIHeader(t *testing.T, record []byte) mobiHeader {
 		return binary.BigEndian.Uint32(record[recordOffset : recordOffset+4])
 	}
 	return mobiHeader{
-		headerLength:   u32(20),
-		firstNonText:   u32(80),
-		languageCode:   u32(92),
-		huffmanRecord:  u32(112),
-		extraDataFlags: binary.BigEndian.Uint16(record[242:244]),
-		fdstRecord:     u32(192),
-		fdstCount:      u32(196),
-		fcisRecord:     u32(200),
-		flisRecord:     u32(208),
-		ncxIndex:       u32(244),
-		chunkIndex:     u32(248),
-		skelIndex:      u32(252),
-		guideIndex:     u32(260),
+		textRecordCount: binary.BigEndian.Uint16(record[8:10]),
+		headerLength:    u32(20),
+		firstNonText:    u32(80),
+		languageCode:    u32(92),
+		huffmanRecord:   u32(112),
+		extraDataFlags:  binary.BigEndian.Uint16(record[242:244]),
+		fdstRecord:      u32(192),
+		fdstCount:       u32(196),
+		fcisRecord:      u32(200),
+		flisRecord:      u32(208),
+		ncxIndex:        u32(244),
+		chunkIndex:      u32(248),
+		skelIndex:       u32(252),
+		guideIndex:      u32(260),
 	}
 }
 
@@ -213,7 +216,7 @@ func TestKF8WritesReferencedStylesheetFlow(t *testing.T) {
 	if len(fdst) < 12+int(header.fdstCount)*8 {
 		t.Fatalf("FDST length = %d, want at least %d", len(fdst), 12+int(header.fdstCount)*8)
 	}
-	text := decompressTextRecords(t, records[1:int(header.firstNonText)])
+	text := decompressTextRecords(t, records[1:1+int(header.textRecordCount)])
 	mainEnd := binary.BigEndian.Uint32(fdst[16:20])
 	styleStart := binary.BigEndian.Uint32(fdst[20:24])
 	styleEnd := binary.BigEndian.Uint32(fdst[24:28])

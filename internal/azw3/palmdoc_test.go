@@ -2,9 +2,31 @@ package azw3
 
 import (
 	"bytes"
+	"encoding/hex"
 	"math/rand"
 	"testing"
 )
+
+func TestPalmDOCCompressionMatchesCalibreGoldenBytes(t *testing.T) {
+	tests := []struct {
+		input []byte
+		hex   string
+	}{
+		{bytes.Repeat([]byte{'a'}, 32), "61616161616161616161618057805761"},
+		{[]byte("abcabcabcabcabcabcabcabcabcabc"), "6162636162636162636162804e63616263616263616263"},
+		{[]byte("0123456789abcdefghij0123456789abcdefghij"), "303132333435363738396162636465666768696a80a76162636465666768696a"},
+		{[]byte{0, 1, 2, 8, 9, 0x7f, 0x80, 0xbf, 0xc0, 0xff}, "0003010208097f0480bfc0ff"},
+	}
+	for i, test := range tests {
+		want, err := hex.DecodeString(test.hex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := compressPalmDOC(test.input); !bytes.Equal(got, want) {
+			t.Fatalf("case %d compressed = %x, want Calibre bytes %x", i, got, want)
+		}
+	}
+}
 
 func TestPalmDOCCompressionRoundTripsAndShrinksRepetitiveText(t *testing.T) {
 	input := bytes.Repeat([]byte("<p>中文正文，中文正文，中文正文。</p>"), 80)
