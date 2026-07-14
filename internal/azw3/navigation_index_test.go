@@ -123,6 +123,53 @@ func TestWriteNavigationIndexTargetsRealChunk(t *testing.T) {
 	}
 }
 
+func TestBuildNCXTableUsesCalibreDepthOffsetOrder(t *testing.T) {
+	toc := []ebook.TOCEntry{
+		{
+			Title: "Volume 1",
+			Href:  "v1.xhtml",
+			Children: []ebook.TOCEntry{
+				{Title: "Chapter 1", Href: "c1.xhtml"},
+				{Title: "Chapter 2", Href: "c2.xhtml"},
+			},
+		},
+		{
+			Title: "Volume 2",
+			Href:  "v2.xhtml",
+			Children: []ebook.TOCEntry{
+				{Title: "Chapter 3", Href: "c3.xhtml"},
+			},
+		},
+	}
+	targets := map[string]target{
+		"v1.xhtml": {absoluteOffset: 0},
+		"c1.xhtml": {absoluteOffset: 100},
+		"c2.xhtml": {absoluteOffset: 200},
+		"v2.xhtml": {absoluteOffset: 300},
+		"c3.xhtml": {absoluteOffset: 400},
+	}
+
+	got := buildNCXTable(toc, targets, 500)
+	wantLabels := []string{"Volume 1", "Volume 2", "Chapter 1", "Chapter 2", "Chapter 3"}
+	if len(got) != len(wantLabels) {
+		t.Fatalf("NCX entries = %d, want %d", len(got), len(wantLabels))
+	}
+	for i, want := range wantLabels {
+		if got[i].index != i || got[i].label != want {
+			t.Fatalf("NCX entry %d = index %d %q, want index %d %q", i, got[i].index, got[i].label, i, want)
+		}
+	}
+	if got[0].parent != -1 || got[0].firstChild != 2 || got[0].lastChild != 3 {
+		t.Fatalf("Volume 1 relations = parent %d, children [%d,%d]", got[0].parent, got[0].firstChild, got[0].lastChild)
+	}
+	if got[1].parent != -1 || got[1].firstChild != 4 || got[1].lastChild != 4 {
+		t.Fatalf("Volume 2 relations = parent %d, children [%d,%d]", got[1].parent, got[1].firstChild, got[1].lastChild)
+	}
+	if got[2].parent != 0 || got[3].parent != 0 || got[4].parent != 1 {
+		t.Fatalf("chapter parents = [%d,%d,%d], want [0,0,1]", got[2].parent, got[3].parent, got[4].parent)
+	}
+}
+
 func TestWriteGeneratedTextCoverToBinaryIndexes(t *testing.T) {
 	source := txtbook.ToEBook(txtbook.Book{
 		Title:  "测试书",

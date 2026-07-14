@@ -3,6 +3,7 @@ package azw3
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -251,37 +252,77 @@ func buildTAGX(tags []tagMeta) []byte {
 }
 
 func buildNCXTable(toc []ebook.TOCEntry, targets map[string]target, textLen int) []ncxEntry {
-	var flat []ncxEntry
+	type pendingEntry struct {
+		id          int
+		parentID    int
+		childIDs    []int
+		originalPos int
+		entry       ncxEntry
+	}
+
+	var pending []pendingEntry
 	var walk func([]ebook.TOCEntry, int, int) []int
-	walk = func(entries []ebook.TOCEntry, depth, parent int) []int {
-		indexes := make([]int, 0, len(entries))
+	walk = func(entries []ebook.TOCEntry, depth, parentID int) []int {
+		ids := make([]int, 0, len(entries))
 		for _, entry := range entries {
 			target := targetForHref(entry.Href, targets)
-			idx := len(flat)
+			id := len(pending)
 			label := strings.TrimSpace(entry.Title)
 			if label == "" {
 				label = entry.Href
 			}
-			flat = append(flat, ncxEntry{
-				index:      idx,
-				label:      label,
-				depth:      depth,
-				offset:     target.absoluteOffset,
-				posFID:     [2]int{target.chunkSeq, target.chunkOffset},
-				parent:     parent,
-				firstChild: -1,
-				lastChild:  -1,
+			pending = append(pending, pendingEntry{
+				id:          id,
+				parentID:    parentID,
+				originalPos: id,
+				entry: ncxEntry{
+					label:      label,
+					depth:      depth,
+					offset:     target.absoluteOffset,
+					posFID:     [2]int{target.chunkSeq, target.chunkOffset},
+					parent:     -1,
+					firstChild: -1,
+					lastChild:  -1,
+				},
 			})
-			indexes = append(indexes, idx)
-			children := walk(entry.Children, depth+1, idx)
-			if len(children) > 0 {
-				flat[idx].firstChild = children[0]
-				flat[idx].lastChild = children[len(children)-1]
-			}
+			ids = append(ids, id)
+			pending[id].childIDs = walk(entry.Children, depth+1, id)
 		}
-		return indexes
+		return ids
 	}
 	walk(toc, 0, -1)
+
+	// Calibre's KF8 writer linearizes NCX entries by depth and then by their
+	// absolute text offset before assigning the final index. The parent and
+	// child fields, as well as the indexing TBS, refer to these final indexes.
+	// Assigning indexes during a depth-first walk makes top-level siblings
+	// non-contiguous and breaks the strand assumptions used by Kindle readers.
+	sort.SliceStable(pending, func(i, j int) bool {
+		if pending[i].entry.depth != pending[j].entry.depth {
+			return pending[i].entry.depth < pending[j].entry.depth
+		}
+		if pending[i].entry.offset != pending[j].entry.offset {
+			return pending[i].entry.offset < pending[j].entry.offset
+		}
+		return pending[i].originalPos < pending[j].originalPos
+	})
+
+	indexByID := make(map[int]int, len(pending))
+	for index := range pending {
+		indexByID[pending[index].id] = index
+	}
+	flat := make([]ncxEntry, len(pending))
+	for index, item := range pending {
+		item.entry.index = index
+		if item.parentID >= 0 {
+			item.entry.parent = indexByID[item.parentID]
+		}
+		if len(item.childIDs) > 0 {
+			item.entry.firstChild = indexByID[item.childIDs[0]]
+			item.entry.lastChild = indexByID[item.childIDs[len(item.childIDs)-1]]
+		}
+		flat[index] = item.entry
+	}
 	for i := range flat {
 		next := textLen
 		for _, other := range flat {
