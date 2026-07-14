@@ -100,6 +100,10 @@ func buildNCXIndex(entries []ncxEntry) [][]byte {
 		cncx.add(entry.label)
 	}
 	idxEntries := make([]indexEntry, 0, len(entries))
+	keyWidth := 3
+	if maxKeyWidth := len(fmt.Sprintf("%X", len(entries)-1)); maxKeyWidth > keyWidth {
+		keyWidth = maxKeyWidth
+	}
 	for _, entry := range entries {
 		tags := map[string][]int{
 			"offset":  {entry.offset},
@@ -118,7 +122,9 @@ func buildNCXIndex(entries []ncxEntry) [][]byte {
 			tags["last_child"] = []int{entry.lastChild}
 		}
 		idxEntries = append(idxEntries, indexEntry{
-			lead: fmt.Sprintf("%02X", entry.index),
+			// INDX entries must be emitted in lexicographic key order. A fixed
+			// width keeps the hexadecimal sequence sorted across FF -> 100.
+			lead: fmt.Sprintf("%0*X", keyWidth, entry.index),
 			tags: tags,
 		})
 	}

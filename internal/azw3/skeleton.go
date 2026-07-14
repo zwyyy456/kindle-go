@@ -9,13 +9,44 @@ func chunkBytes(data []byte, size int) []textRecord {
 	chunks := make([]textRecord, 0, (len(data)+size-1)/size)
 	start := 0
 	for start < len(data) {
-		end := safeChunkEnd(data, start, min(start+size, len(data)))
+		end := min(start+size, len(data))
 		chunk := make([]byte, end-start)
 		copy(chunk, data[start:end])
-		chunks = append(chunks, textRecord{data: chunk, start: start})
+		overlapEnd := end + utf8OverlapLength(data, end)
+		overlap := make([]byte, overlapEnd-end)
+		copy(overlap, data[end:overlapEnd])
+		chunks = append(chunks, textRecord{data: chunk, overlap: overlap, start: start})
 		start = end
 	}
 	return chunks
+}
+
+func utf8OverlapLength(data []byte, end int) int {
+	if end <= 0 || end >= len(data) {
+		return 0
+	}
+	lead := end - 1
+	for lead > 0 && end-lead < utf8.UTFMax && data[lead]&0xc0 == 0x80 {
+		lead--
+	}
+	width := 0
+	switch b := data[lead]; {
+	case b < 0x80:
+		width = 1
+	case b >= 0xc2 && b <= 0xdf:
+		width = 2
+	case b >= 0xe0 && b <= 0xef:
+		width = 3
+	case b >= 0xf0 && b <= 0xf4:
+		width = 4
+	default:
+		return 0
+	}
+	missing := width - (end - lead)
+	if missing <= 0 || end+missing > len(data) {
+		return 0
+	}
+	return missing
 }
 
 func safeChunkEnd(data []byte, start, limit int) int {

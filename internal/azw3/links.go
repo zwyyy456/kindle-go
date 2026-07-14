@@ -106,17 +106,32 @@ func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []
 		docs = append(docs, compiled)
 		resolveDocumentTargets(rendered, compiled, targets)
 	}
-	text := flow.Bytes()
+	mainText := flow.Bytes()
+	flows := [][]byte{
+		mainText,
+		[]byte(css(b.Style)),
+		[]byte("@page {\n    margin-bottom: 5pt;\n    margin-top: 5pt\n    }"),
+		[]byte("\nli {\n    list-style-type: none\n    }\na {\n    text-decoration: none\n    }\n"),
+	}
+	var allFlows bytes.Buffer
+	flowBounds := make([][2]int, 0, len(flows))
+	for _, contents := range flows {
+		start := allFlows.Len()
+		allFlows.Write(contents)
+		flowBounds = append(flowBounds, [2]int{start, allFlows.Len()})
+	}
+	text := allFlows.Bytes()
 	return compiledBook{
 		metadata:   b.Metadata,
 		style:      b.Style,
 		text:       text,
 		records:    chunkBytes(text, textRecordSize),
+		flowBounds: flowBounds,
 		documents:  docs,
 		targets:    targets,
 		skelTable:  buildSkelTable(docs),
 		chunkTable: chunkTable,
-		tocTable:   buildNCXTable(b.TOC, targets, len(text)),
+		tocTable:   buildNCXTable(b.TOC, targets, len(mainText)),
 		guideTable: buildGuideTable(b.Guide, targets),
 		resources:  resources,
 	}, nil
@@ -131,13 +146,13 @@ func renderDocument(meta ebook.Metadata, style ebook.Style, doc ebook.Document, 
 	}
 	body.WriteString(">\n<head>\n")
 	fmt.Fprintf(&body, "<title>%s</title>\n", html.EscapeString(doc.Title))
-	body.WriteString("<style type=\"text/css\">\n")
-	body.WriteString(css(style))
+	body.WriteString("<link rel=\"stylesheet\" type=\"text/css\" href=\"kindle:flow:0001?mime=text/css\"/>\n")
+	body.WriteString("<link rel=\"stylesheet\" type=\"text/css\" href=\"kindle:flow:0002?mime=text/css\"/>\n")
 	if extraCSS != "" {
-		body.WriteByte('\n')
+		body.WriteString("<style type=\"text/css\">\n")
 		body.WriteString(extraCSS)
+		body.WriteString("</style>\n")
 	}
-	body.WriteString("</style>\n")
 	body.WriteString("</head>\n")
 	renderNode(&body, doc.Body)
 	body.WriteString("\n</html>\n")

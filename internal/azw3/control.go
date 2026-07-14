@@ -4,13 +4,15 @@ import "bytes"
 
 var flisRecord = append([]byte("FLIS\x00\x00\x00\x08\x00\x41\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\x00\x01\x00\x03\x00\x00\x00\x03\x00\x00\x00\x01"), []byte{0xff, 0xff, 0xff, 0xff}...)
 
-func buildFDST(textLen int) []byte {
+func buildFDST(flowBounds [][2]int) []byte {
 	var w bytes.Buffer
 	w.WriteString("FDST")
 	writeUint32(&w, 12)
-	writeUint32(&w, 1)
-	writeUint32(&w, 0)
-	writeUint32(&w, uint32(textLen))
+	writeUint32(&w, uint32(len(flowBounds)))
+	for _, bounds := range flowBounds {
+		writeUint32(&w, uint32(bounds[0]))
+		writeUint32(&w, uint32(bounds[1]))
+	}
 	return w.Bytes()
 }
 
@@ -23,9 +25,7 @@ func buildFCIS(textLen int) []byte {
 	writeUint32(&w, 0)
 	writeUint32(&w, uint32(textLen))
 	writeUint32(&w, 0)
-	writeUint32(&w, 0)
 	writeUint32(&w, 0x28)
-	writeUint32(&w, 0)
 	writeUint32(&w, 0)
 	writeUint32(&w, 0x28)
 	writeUint32(&w, 0x08)

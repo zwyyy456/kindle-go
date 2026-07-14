@@ -9,10 +9,11 @@ type compiledBook struct {
 	metadata ebook.Metadata
 	style    ebook.Style
 
-	text      []byte
-	records   []textRecord
-	documents []compiledDocument
-	targets   map[string]target
+	text       []byte
+	records    []textRecord
+	flowBounds [][2]int
+	documents  []compiledDocument
+	targets    map[string]target
 
 	skelTable  []skelEntry
 	chunkTable []chunkEntry
@@ -43,8 +44,9 @@ type record struct {
 }
 
 type textRecord struct {
-	data  []byte
-	start int
+	data    []byte
+	overlap []byte
+	start   int
 }
 
 type compiledDocument struct {

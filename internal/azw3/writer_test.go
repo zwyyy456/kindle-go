@@ -49,12 +49,15 @@ func TestWritePalmDBMOBIWithMetadataTextAndTOC(t *testing.T) {
 	if !bytes.Contains(records[0], []byte("MOBI")) {
 		t.Fatal("header record missing MOBI")
 	}
+	if got := binary.BigEndian.Uint16(records[0][0:2]); got != 2 {
+		t.Fatalf("PalmDOC compression = %d, want 2", got)
+	}
 	for _, want := range []string{"EXTH", "测试书", "作者", "zh-CN"} {
 		if !bytes.Contains(records[0], []byte(want)) {
 			t.Fatalf("header record missing %q", want)
 		}
 	}
-	if !bytes.Contains(bytes.Join(records[1:int(inspectMOBIHeader(t, records[0]).firstNonText)], nil), []byte("正文。")) {
+	if !bytes.Contains(decompressTextRecords(t, records[1:int(inspectMOBIHeader(t, records[0]).firstNonText)]), []byte("正文。")) {
 		t.Fatalf("text record missing paragraph: %q", records[1])
 	}
 	header := inspectMOBIHeader(t, records[0])
@@ -123,22 +126,32 @@ func TestWriteSplitsLargeChineseTextOnUTF8Boundaries(t *testing.T) {
 		t.Fatalf("expected multiple text records, first non-text = %d", header.firstNonText)
 	}
 	for i := 1; i < int(header.firstNonText); i++ {
-		if !utf8.Valid(records[i]) {
-			t.Fatalf("text record %d is not valid utf-8", i)
+		decoded := decompressTextRecords(t, records[i:i+1])
+		if i < int(header.firstNonText)-1 && len(decoded) != 4096 {
+			t.Fatalf("text record %d decoded length = %d, want 4096", i, len(decoded))
 		}
+	}
+	if decoded := decompressTextRecords(t, records[1:int(header.firstNonText)]); !utf8.Valid(decoded) {
+		t.Fatal("reconstructed text is not valid UTF-8")
+	}
+	if header.extraDataFlags != 3 {
+		t.Fatalf("extra data flags = %d, want multibyte and indexing flags", header.extraDataFlags)
 	}
 }
 
 type mobiHeader struct {
-	headerLength uint32
-	firstNonText uint32
-	fdstRecord   uint32
-	flisRecord   uint32
-	fcisRecord   uint32
-	ncxIndex     uint32
-	chunkIndex   uint32
-	skelIndex    uint32
-	guideIndex   uint32
+	headerLength   uint32
+	firstNonText   uint32
+	huffmanRecord  uint32
+	extraDataFlags uint16
+	fdstRecord     uint32
+	fdstCount      uint32
+	flisRecord     uint32
+	fcisRecord     uint32
+	ncxIndex       uint32
+	chunkIndex     uint32
+	skelIndex      uint32
+	guideIndex     uint32
 }
 
 func inspectMOBIHeader(t *testing.T, record []byte) mobiHeader {
@@ -153,15 +166,78 @@ func inspectMOBIHeader(t *testing.T, record []byte) mobiHeader {
 		return binary.BigEndian.Uint32(record[recordOffset : recordOffset+4])
 	}
 	return mobiHeader{
-		headerLength: u32(20),
-		firstNonText: u32(80),
-		fdstRecord:   u32(192),
-		fcisRecord:   u32(200),
-		flisRecord:   u32(208),
-		ncxIndex:     u32(244),
-		chunkIndex:   u32(248),
-		skelIndex:    u32(252),
-		guideIndex:   u32(260),
+		headerLength:   u32(20),
+		firstNonText:   u32(80),
+		huffmanRecord:  u32(112),
+		extraDataFlags: binary.BigEndian.Uint16(record[242:244]),
+		fdstRecord:     u32(192),
+		fdstCount:      u32(196),
+		fcisRecord:     u32(200),
+		flisRecord:     u32(208),
+		ncxIndex:       u32(244),
+		chunkIndex:     u32(248),
+		skelIndex:      u32(252),
+		guideIndex:     u32(260),
+	}
+}
+
+func TestKF8WritesReferencedStylesheetFlow(t *testing.T) {
+	b := ebook.Book{
+		Metadata: ebook.Metadata{Title: "Book", Language: "zh-CN"},
+		Spine: []ebook.Document{{
+			Href: "text.xhtml",
+			Body: ebook.Element("body", nil,
+				ebook.Element("p", nil, ebook.Text("text")),
+			),
+		}},
+	}
+	out := filepath.Join(t.TempDir(), "book.azw3")
+	if err := azw3.Write(out, b, azw3.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := readRecords(t, data)
+	header := inspectMOBIHeader(t, records[0])
+	if header.fdstCount < 2 {
+		t.Fatalf("FDST flow count = %d, want at least main text and stylesheet flows", header.fdstCount)
+	}
+	fdst := records[header.fdstRecord]
+	if len(fdst) < 12+int(header.fdstCount)*8 {
+		t.Fatalf("FDST length = %d, want at least %d", len(fdst), 12+int(header.fdstCount)*8)
+	}
+	text := decompressTextRecords(t, records[1:int(header.firstNonText)])
+	mainEnd := binary.BigEndian.Uint32(fdst[16:20])
+	styleStart := binary.BigEndian.Uint32(fdst[20:24])
+	styleEnd := binary.BigEndian.Uint32(fdst[24:28])
+	if mainEnd != styleStart || styleStart >= styleEnd || int(styleEnd) > len(text) {
+		t.Fatalf("invalid main/style flow boundaries: mainEnd=%d style=%d..%d text=%d", mainEnd, styleStart, styleEnd, len(text))
+	}
+	mainFlow := text[:mainEnd]
+	styleFlow := text[styleStart:styleEnd]
+	if !bytes.Contains(mainFlow, []byte(`href="kindle:flow:0001?mime=text/css"`)) {
+		t.Fatal("main flow does not reference the stylesheet flow")
+	}
+	if !bytes.Contains(styleFlow, []byte("text-indent")) {
+		t.Fatalf("stylesheet flow does not contain book CSS: %q", styleFlow)
+	}
+}
+
+func TestMOBIHeaderUsesZeroForAbsentHuffmanRecords(t *testing.T) {
+	b := ebook.Book{Metadata: ebook.Metadata{Title: "Book"}, Spine: []ebook.Document{{Href: "text.xhtml", Body: ebook.Element("body", nil, ebook.Text("text"))}}}
+	out := filepath.Join(t.TempDir(), "book.azw3")
+	if err := azw3.Write(out, b, azw3.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := inspectMOBIHeader(t, readRecords(t, data)[0])
+	if header.huffmanRecord != 0 {
+		t.Fatalf("Huffman record offset = %#x, want 0 when compression is PalmDOC", header.huffmanRecord)
 	}
 }
 
@@ -185,6 +261,76 @@ func readRecords(t *testing.T, data []byte) [][]byte {
 		records[i] = data[offsets[i]:offsets[i+1]]
 	}
 	return records
+}
+
+func decompressTextRecords(t *testing.T, records [][]byte) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	for i, src := range records {
+		indexingSize, markerSize := decodeBackwardSize(t, src)
+		if indexingSize < markerSize || indexingSize > len(src) {
+			t.Fatalf("text record %d has invalid indexing trailer size %d", i+1, indexingSize)
+		}
+		src = src[:len(src)-indexingSize]
+		if len(src) == 0 {
+			t.Fatalf("text record %d is missing multibyte trailer", i+1)
+		}
+		trailerSize := int(src[len(src)-1]&3) + 1
+		if trailerSize > len(src) {
+			t.Fatalf("text record %d has invalid multibyte trailer", i+1)
+		}
+		src = src[:len(src)-trailerSize]
+		var decoded bytes.Buffer
+		for pos := 0; pos < len(src); {
+			b := src[pos]
+			pos++
+			switch {
+			case b == 0 || (b >= 0x09 && b <= 0x7f):
+				decoded.WriteByte(b)
+			case b >= 1 && b <= 8:
+				end := pos + int(b)
+				if end > len(src) {
+					t.Fatalf("text record %d has truncated literal run", i+1)
+				}
+				decoded.Write(src[pos:end])
+				pos = end
+			case b >= 0x80 && b <= 0xbf:
+				if pos >= len(src) {
+					t.Fatalf("text record %d has truncated back-reference", i+1)
+				}
+				code := uint16(b)<<8 | uint16(src[pos])
+				pos++
+				distance := int((code & 0x3ff8) >> 3)
+				length := int(code&7) + 3
+				for j := 0; j < length; j++ {
+					data := decoded.Bytes()
+					if distance == 0 || distance > len(data) {
+						t.Fatalf("text record %d has invalid distance %d", i+1, distance)
+					}
+					decoded.WriteByte(data[len(data)-distance])
+				}
+			default:
+				decoded.WriteByte(' ')
+				decoded.WriteByte(b ^ 0x80)
+			}
+		}
+		out.Write(decoded.Bytes())
+	}
+	return out.Bytes()
+}
+
+func decodeBackwardSize(t *testing.T, data []byte) (int, int) {
+	t.Helper()
+	value, shift := 0, 0
+	for i := len(data) - 1; i >= 0; i-- {
+		value |= int(data[i]&0x7f) << shift
+		shift += 7
+		if data[i]&0x80 != 0 {
+			return value, (shift + 6) / 7
+		}
+	}
+	t.Fatal("trailing data length marker is missing")
+	return 0, 0
 }
 
 func min(a, b int) int {

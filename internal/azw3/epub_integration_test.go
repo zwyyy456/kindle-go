@@ -28,7 +28,7 @@ func TestEPUBReaderToAZW3NavigationTargetsRealChunks(t *testing.T) {
 	}
 	records := readAZW3Records(t, output)
 	header := inspectAZW3MOBIHeader(t, records[0])
-	text := bytes.Join(records[1:int(header.firstNonText)], nil)
+	text := decompressTextRecords(t, records[1:int(header.firstNonText)])
 	skelIndex := inspectAZW3Index(t, records, header.skelIndex)
 	chunkIndex := inspectAZW3Index(t, records, header.chunkIndex)
 	ncxIndex := inspectAZW3Index(t, records, header.ncxIndex)

@@ -1,10 +1,22 @@
 package azw3
 
 func buildRecords(c compiledBook) ([]record, error) {
+	recordLengths := make([]int, len(c.records))
+	for i, chunk := range c.records {
+		recordLengths[i] = len(chunk.data)
+	}
+	indexingTBS, err := buildIndexingTBS(c.tocTable, recordLengths)
+	if err != nil {
+		return nil, err
+	}
 	records := make([]record, 0, len(c.records)+12)
 	records = append(records, record{})
 	for _, chunk := range c.records {
-		records = append(records, record{data: chunk.data})
+		data := compressPalmDOC(chunk.data)
+		data = append(data, chunk.overlap...)
+		data = append(data, byte(len(chunk.overlap)))
+		data = append(data, encodeTrailingData(indexingTBS[len(records)-1])...)
+		records = append(records, record{data: data})
 	}
 	c.firstNonTextRecord = len(records)
 
@@ -39,8 +51,8 @@ func buildRecords(c compiledBook) ([]record, error) {
 	}
 
 	c.fdstRecord = uint32(len(records))
-	c.fdstCount = 1
-	records = append(records, record{data: buildFDST(len(c.text))})
+	c.fdstCount = uint32(len(c.flowBounds))
+	records = append(records, record{data: buildFDST(c.flowBounds)})
 	c.flisRecord = uint32(len(records))
 	records = append(records, record{data: flisRecord})
 	c.fcisRecord = uint32(len(records))

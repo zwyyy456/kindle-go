@@ -24,7 +24,7 @@ func TestWriteNavigationIndexTargetsRealChunk(t *testing.T) {
 
 	records := readAZW3Records(t, out)
 	header := inspectAZW3MOBIHeader(t, records[0])
-	text := bytes.Join(records[1:int(header.firstNonText)], nil)
+	text := decompressTextRecords(t, records[1:int(header.firstNonText)])
 
 	chunkIndex := inspectAZW3Index(t, records, header.chunkIndex)
 	skelIndex := inspectAZW3Index(t, records, header.skelIndex)
@@ -153,7 +153,7 @@ func TestWriteGeneratedTextCoverToBinaryIndexes(t *testing.T) {
 
 	records := readAZW3Records(t, out)
 	header := inspectAZW3MOBIHeader(t, records[0])
-	text := bytes.Join(records[1:int(header.firstNonText)], nil)
+	text := decompressTextRecords(t, records[1:int(header.firstNonText)])
 	chunkIndex := inspectAZW3Index(t, records, header.chunkIndex)
 	skelIndex := inspectAZW3Index(t, records, header.skelIndex)
 	guideIndex := inspectAZW3Index(t, records, header.guideIndex)

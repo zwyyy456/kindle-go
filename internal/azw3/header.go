@@ -12,7 +12,7 @@ func buildHeaderRecord(c compiledBook, exth []byte) []byte {
 	fullNameOffset := 16 + mobiHeaderLen + len(exth)
 
 	var w bytes.Buffer
-	writeUint16(&w, 1)
+	writeUint16(&w, 2)
 	writeUint16(&w, 0)
 	writeUint32(&w, uint32(len(c.text)))
 	writeUint16(&w, uint16(len(c.records)))
@@ -39,7 +39,10 @@ func buildHeaderRecord(c compiledBook, exth []byte) []byte {
 	put(92, languageCode(c.metadata.Language))
 	put(104, 8)
 	put(108, c.firstResourceRecord)
-	put(112, 0xffffffff)
+	// PalmDOC compression has no HUFF/CDIC records. Native Kindle readers
+	// expect a zero offset/count pair here; 0xffffffff is treated as a record
+	// reference by older Mobi8SDK builds.
+	put(112, 0)
 	put(116, 0)
 	put(120, 0)
 	put(124, 0)
@@ -59,7 +62,9 @@ func buildHeaderRecord(c compiledBook, exth []byte) []byte {
 	put(228, 0)
 	put(232, 0xffffffff)
 	put(236, 0xffffffff)
-	put(240, 0)
+	// Text records carry both the multibyte overlap trailer (bit 0) and the
+	// navigation indexing TBS trailer (bit 1).
+	put(240, 3)
 	put(244, c.ncxIndexRecord)
 	put(248, c.chunkIndexRecord)
 	put(252, c.skelIndexRecord)

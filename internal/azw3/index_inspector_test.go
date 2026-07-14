@@ -9,11 +9,12 @@ import (
 )
 
 type inspectedMOBIHeader struct {
-	firstNonText uint32
-	ncxIndex     uint32
-	chunkIndex   uint32
-	skelIndex    uint32
-	guideIndex   uint32
+	firstNonText   uint32
+	extraDataFlags uint16
+	ncxIndex       uint32
+	chunkIndex     uint32
+	skelIndex      uint32
+	guideIndex     uint32
 }
 
 type inspectedTag struct {
@@ -65,6 +66,56 @@ func readAZW3Records(t *testing.T, path string) [][]byte {
 	return records
 }
 
+func decompressTextRecords(t *testing.T, records [][]byte) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	for i, record := range records {
+		record, _ = stripIndexingTrailerForTest(t, record)
+		payload, _ := stripMultibyteTrailerForTest(t, record)
+		decoded, err := decompressPalmDOC(payload)
+		if err != nil {
+			t.Fatalf("decompress text record %d: %v", i+1, err)
+		}
+		out.Write(decoded)
+	}
+	return out.Bytes()
+}
+
+func stripIndexingTrailerForTest(t *testing.T, record []byte) ([]byte, []byte) {
+	t.Helper()
+	size, markerSize := decodeBackwardSizeForTest(t, record)
+	if size < markerSize || size > len(record) {
+		t.Fatalf("indexing trailer size %d is invalid for record size %d", size, len(record))
+	}
+	return record[:len(record)-size], record[len(record)-size : len(record)-markerSize]
+}
+
+func decodeBackwardSizeForTest(t *testing.T, data []byte) (int, int) {
+	t.Helper()
+	value, shift := 0, 0
+	for i := len(data) - 1; i >= 0; i-- {
+		value |= int(data[i]&0x7f) << shift
+		shift += 7
+		if data[i]&0x80 != 0 {
+			return value, (shift + 6) / 7
+		}
+	}
+	t.Fatal("trailing data length marker is missing")
+	return 0, 0
+}
+
+func stripMultibyteTrailerForTest(t *testing.T, record []byte) ([]byte, []byte) {
+	t.Helper()
+	if len(record) == 0 {
+		t.Fatal("text record is missing multibyte trailer")
+	}
+	size := int(record[len(record)-1]&3) + 1
+	if size > len(record) {
+		t.Fatalf("multibyte trailer size %d exceeds record size %d", size, len(record))
+	}
+	return record[:len(record)-size], record[len(record)-size : len(record)-1]
+}
+
 func inspectAZW3MOBIHeader(t *testing.T, record []byte) inspectedMOBIHeader {
 	t.Helper()
 	if len(record) < 280 {
@@ -77,11 +128,12 @@ func inspectAZW3MOBIHeader(t *testing.T, record []byte) inspectedMOBIHeader {
 		return binary.BigEndian.Uint32(record[recordOffset : recordOffset+4])
 	}
 	return inspectedMOBIHeader{
-		firstNonText: u32(80),
-		ncxIndex:     u32(244),
-		chunkIndex:   u32(248),
-		skelIndex:    u32(252),
-		guideIndex:   u32(260),
+		firstNonText:   u32(80),
+		extraDataFlags: binary.BigEndian.Uint16(record[242:244]),
+		ncxIndex:       u32(244),
+		chunkIndex:     u32(248),
+		skelIndex:      u32(252),
+		guideIndex:     u32(260),
 	}
 }
 
@@ -256,6 +308,26 @@ func readIndexUint32(t *testing.T, data []byte, off int) uint32 {
 		t.Fatalf("uint32 offset %d past len %d", off, len(data))
 	}
 	return binary.BigEndian.Uint32(data[off : off+4])
+}
+
+func TestNCXKeysAreFixedWidthAndLexicographicallySorted(t *testing.T) {
+	entries := make([]ncxEntry, 300)
+	for i := range entries {
+		entries[i] = ncxEntry{index: i, label: "Chapter"}
+	}
+	records := buildNCXIndex(entries)
+	idx := inspectAZW3Index(t, records, 0)
+	if len(idx.entries) != len(entries) {
+		t.Fatalf("entries = %d, want %d", len(idx.entries), len(entries))
+	}
+	for i, entry := range idx.entries {
+		if len(entry.lead) != 3 {
+			t.Fatalf("entry %d key %q has width %d, want 3", i, entry.lead, len(entry.lead))
+		}
+		if i > 0 && idx.entries[i-1].lead >= entry.lead {
+			t.Fatalf("NCX keys are not strictly sorted at %q -> %q", idx.entries[i-1].lead, entry.lead)
+		}
+	}
 }
 
 func requiredTag(t *testing.T, entry inspectedIndexEntry, number byte, label string) []int {
