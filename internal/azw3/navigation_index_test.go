@@ -2,6 +2,7 @@ package azw3
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -70,6 +71,12 @@ func TestWriteNavigationIndexTargetsRealChunk(t *testing.T) {
 		}
 		if fileNumber := requiredTag(t, entry, 3, "file_number")[0]; fileNumber != want.fileNumber {
 			t.Fatalf("chunk %d file_number = %d, want %d", seq, fileNumber, want.fileNumber)
+		}
+		selectorOffset := requiredTag(t, entry, 2, "cncx_offset")[0]
+		section := normalized.Spine[want.fileNumber].Body.Children[0]
+		wantSelector := fmt.Sprintf("P-//*[@aid='%s']", ebook.AttrValue(section, "aid"))
+		if selector := chunkIndex.cncxString(t, selectorOffset); selector != wantSelector {
+			t.Fatalf("chunk %d selector = %q, want %q", seq, selector, wantSelector)
 		}
 		geometry := requiredTag(t, entry, 6, "chunk geometry")
 		if len(geometry) < 2 || geometry[0] != want.startPos || geometry[1] != want.length {

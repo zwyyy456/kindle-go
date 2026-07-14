@@ -68,7 +68,10 @@ func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []
 	for i, source := range prepared {
 		doc := source.document
 		rendered := []byte(renderDocument(b.Metadata, b.Style, doc, documentCSS[doc.Href]))
-		skeleton, rawChunks, insertOffset := splitSkeletonChunks(rendered)
+		skeleton, rawChunks, insertOffset, insertParentAID := splitSkeletonChunks(rendered, source.bodyAID)
+		if len(rawChunks) > 0 && insertParentAID == "" {
+			return compiledBook{}, fmt.Errorf("document %q has chunks without an insertion parent aid", doc.Href)
+		}
 		flowStart := flow.Len()
 		compiled := compiledDocument{
 			href:       doc.Href,
@@ -88,7 +91,7 @@ func compilePreparedBook(b ebook.Book, prepared []preparedDocument, resources []
 				insertPos: flowStart + insertOffset + chunkStart,
 				startPos:  chunkStart,
 				length:    len(raw),
-				selector:  "S-" + source.bodyAID,
+				selector:  fmt.Sprintf("P-//*[@aid='%s']", insertParentAID),
 			}
 			compiled.chunks = append(compiled.chunks, content)
 			chunkTable = append(chunkTable, chunkEntry{

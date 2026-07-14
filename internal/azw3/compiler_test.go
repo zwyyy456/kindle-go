@@ -66,6 +66,34 @@ func TestCompileBookBuildsMultiDocumentSkeletonChunksAndTargets(t *testing.T) {
 	}
 }
 
+func TestCompileBookChunkSelectorUsesBodyForWholeBodyExtraction(t *testing.T) {
+	b := normalizeBook(ebook.Book{
+		Metadata: ebook.Metadata{Title: "测试书", Language: "zh-CN"},
+		Spine: []ebook.Document{{
+			Href:  "text/chapter.xhtml",
+			Title: "正文",
+			Body: ebook.Element("body", nil,
+				ebook.Element("p", nil, ebook.Text("第一段")),
+				ebook.Element("p", nil, ebook.Text("第二段")),
+			),
+		}},
+	})
+
+	compiled, err := compileBook(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compiled.chunkTable) == 0 {
+		t.Fatal("compiled book has no chunks")
+	}
+	want := fmt.Sprintf("P-//*[@aid='%s']", ebook.AttrValue(b.Spine[0].Body, "aid"))
+	for i, chunk := range compiled.chunkTable {
+		if chunk.selector != want {
+			t.Fatalf("chunk %d selector = %q, want %q", i, chunk.selector, want)
+		}
+	}
+}
+
 func testDocument(href, title, sectionID, headingID string, paragraphs int) ebook.Document {
 	children := []*ebook.Node{
 		ebook.Element("h2", []ebook.Attr{ebook.A("id", headingID)}, ebook.Text(title)),

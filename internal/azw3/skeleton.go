@@ -1,6 +1,9 @@
 package azw3
 
-import "unicode/utf8"
+import (
+	"bytes"
+	"unicode/utf8"
+)
 
 func chunkBytes(data []byte, size int) []textRecord {
 	if len(data) == 0 {
@@ -109,11 +112,11 @@ func blockBoundary(data []byte, start, end int) int {
 	return end
 }
 
-func splitSkeletonChunks(rendered []byte) ([]byte, [][]byte, int) {
+func splitSkeletonChunks(rendered []byte, bodyAID string) ([]byte, [][]byte, int, string) {
 	openEnd := bodyInsertOffset(rendered)
 	closeStart := lastIndex(rendered, []byte("</body>"))
 	if openEnd <= 0 || closeStart < openEnd {
-		return rendered, nil, 0
+		return rendered, nil, 0, ""
 	}
 	body := rendered[openEnd:closeStart]
 	if sectionOpenEnd, sectionCloseStart, ok := singleSectionRange(body); ok {
@@ -122,7 +125,8 @@ func splitSkeletonChunks(rendered []byte) ([]byte, [][]byte, int) {
 		skeleton = append(skeleton, rendered[:insertOffset]...)
 		skeleton = append(skeleton, rendered[openEnd+sectionCloseStart:]...)
 		chunks := splitContentChunks(body[sectionOpenEnd:sectionCloseStart], 8192)
-		return skeleton, chunks, insertOffset
+		sectionAID := tagAttributeValue(body[:sectionOpenEnd], "aid")
+		return skeleton, chunks, insertOffset, sectionAID
 	}
 
 	skeleton := make([]byte, 0, len(rendered)-(closeStart-openEnd))
@@ -130,7 +134,21 @@ func splitSkeletonChunks(rendered []byte) ([]byte, [][]byte, int) {
 	skeleton = append(skeleton, rendered[closeStart:]...)
 
 	chunks := splitContentChunks(body, 8192)
-	return skeleton, chunks, openEnd
+	return skeleton, chunks, openEnd, bodyAID
+}
+
+func tagAttributeValue(tag []byte, name string) string {
+	prefix := []byte(" " + name + `="`)
+	start := bytes.Index(tag, prefix)
+	if start < 0 {
+		return ""
+	}
+	start += len(prefix)
+	end := bytes.IndexByte(tag[start:], '"')
+	if end < 0 {
+		return ""
+	}
+	return string(tag[start : start+end])
 }
 
 func splitContentChunks(data []byte, size int) [][]byte {
