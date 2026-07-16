@@ -8,6 +8,10 @@
 
 The implementation keeps everything in one Go CLI binary.
 
+The confirmed Web UI v1 product direction and functional requirements are documented in
+[`docs/product-design.md`](docs/product-design.md). The sections below describe the functionality
+that is currently implemented.
+
 ## Project Layout
 
 - `main.go`: top-level CLI dispatch only.
