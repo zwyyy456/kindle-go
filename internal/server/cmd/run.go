@@ -72,6 +72,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	handler := server.Handler{
 		Library:    libraryService,
 		Generation: generationService,
+		Tasks:      taskService,
 	}
 	srv := server.Server{
 		Config: server.Config{

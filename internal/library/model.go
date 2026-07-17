@@ -14,14 +14,28 @@ const (
 )
 
 type File struct {
-	ID          string
-	BookID      string
-	Role        string
-	Format      string
-	DisplayName string
-	SHA256      string
-	Size        int64
-	CreatedAt   time.Time
+	ID             string
+	BookID         string
+	Role           string
+	Format         string
+	DisplayName    string
+	SHA256         string
+	Size           int64
+	SourceFileID   string
+	TaskID         string
+	ParametersJSON string
+	HasUnresolved  bool
+	CreatedAt      time.Time
+}
+
+type BookDetail struct {
+	Book  Book
+	Files []File
+}
+
+type KindleBook struct {
+	Book Book
+	File File
 }
 
 type Book struct {

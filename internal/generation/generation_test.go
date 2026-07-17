@@ -49,6 +49,46 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 	if err != nil || !ok || loaded.LatestArtifact.ID == "" {
 		t.Fatalf("book after generation = %#v, %v, %v", loaded, ok, err)
 	}
+	detail, ok, err := libraryService.GetBookDetail(context.Background(), book.ID)
+	if err != nil || !ok {
+		t.Fatalf("detail = %#v, %v, %v", detail, ok, err)
+	}
+	artifacts := 0
+	formats := map[string]bool{}
+	for _, file := range detail.Files {
+		if file.Role == "artifact" {
+			artifacts++
+			formats[file.Format] = true
+			if file.TaskID == "" || file.ParametersJSON == "" {
+				t.Fatalf("artifact provenance = %#v", file)
+			}
+		}
+	}
+	if artifacts != 2 || !formats["epub"] || !formats["azw3"] {
+		t.Fatalf("artifact formats = %#v in %#v", formats, detail.Files)
+	}
+	kindle, err := libraryService.LatestKindleFiles(context.Background(), false)
+	if err != nil || len(kindle) != 1 || kindle[0].File.Format != "azw3" {
+		t.Fatalf("Kindle projection = %#v, %v", kindle, err)
+	}
+	again, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}, Options: Options{Title: "第二版"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitGenerationStatus(t, taskService, again[0].ID, task.Completed)
+	detail, _, err = libraryService.GetBookDetail(context.Background(), book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts = 0
+	for _, file := range detail.Files {
+		if file.Role == "artifact" {
+			artifacts++
+		}
+	}
+	if artifacts != 3 {
+		t.Fatalf("repeated generation retained %d artifacts, want 3", artifacts)
+	}
 	cancel()
 	select {
 	case err := <-runnerDone:
@@ -67,7 +107,7 @@ func TestGenerationFailsWhenImmutableSourceHashChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, _, err := libraryService.ResolveFile(context.Background(), book.ID, "original")
+	path, _, err := libraryService.ResolveOriginal(context.Background(), book.ID, book.Original.ID, book.Original.SHA256)
 	if err != nil {
 		t.Fatal(err)
 	}

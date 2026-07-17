@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -25,16 +26,60 @@ type Store struct {
 }
 
 type File struct {
-	ID          string
-	BookID      string
-	Role        string
-	State       string
-	Format      string
-	DisplayName string
-	RelPath     string
-	SHA256      string
-	Size        int64
-	CreatedAt   time.Time
+	ID             string
+	BookID         string
+	Role           string
+	State          string
+	Format         string
+	DisplayName    string
+	RelPath        string
+	SHA256         string
+	Size           int64
+	SourceFileID   string
+	TaskID         string
+	ParametersJSON string
+	HasUnresolved  bool
+	CreatedAt      time.Time
+}
+
+func (s *Store) File(ctx context.Context, id string) (File, bool, error) {
+	file, err := scanFile(s.db.QueryRowContext(ctx, fileSelect+` WHERE id = ? AND state = 'ready'`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, false, nil
+	}
+	return file, err == nil, err
+}
+
+func (s *Store) FilesForBook(ctx context.Context, bookID string) ([]File, error) {
+	rows, err := s.db.QueryContext(ctx, fileSelect+` WHERE book_id = ? AND state = 'ready' ORDER BY created_at DESC, id DESC`, bookID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []File
+	for rows.Next() {
+		file, err := scanFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, rows.Err()
+}
+
+const fileSelect = `SELECT id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, COALESCE(source_file_id, ''), COALESCE(task_id, ''), COALESCE(parameters_json, ''), has_unresolved, created_at FROM files`
+
+func scanFile(row rowScanner) (File, error) {
+	var file File
+	var unresolved int
+	var created string
+	if err := row.Scan(&file.ID, &file.BookID, &file.Role, &file.State, &file.Format, &file.DisplayName, &file.RelPath, &file.SHA256, &file.Size, &file.SourceFileID, &file.TaskID, &file.ParametersJSON, &unresolved, &created); err != nil {
+		return File{}, err
+	}
+	file.HasUnresolved = unresolved != 0
+	var err error
+	file.CreatedAt, err = parseTime(created)
+	return file, err
 }
 
 type Book struct {

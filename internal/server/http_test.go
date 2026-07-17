@@ -30,6 +30,11 @@ func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 	if !strings.HasPrefix(location, "/books/") {
 		t.Fatalf("location = %q", location)
 	}
+	detail := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(detail, httptest.NewRequest(http.MethodGet, location, nil))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "Generate") {
+		t.Fatalf("detail = %d, %q", detail.Code, detail.Body.String())
+	}
 	books, err := service.AllBooks(context.Background())
 	if err != nil || len(books) != 1 {
 		t.Fatalf("books = %d, %v", len(books), err)
@@ -110,10 +115,52 @@ func TestWebGenerateCreatesTaskAndLegacyConvertRouteIsGone(t *testing.T) {
 	if err != nil || len(tasks) != 1 || tasks[0].Status != task.Queued || tasks[0].Type != task.GenerateEPUB {
 		t.Fatalf("tasks = %#v, %v", tasks, err)
 	}
+	status := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/tasks/"+tasks[0].ID+"/status", nil))
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"status":"queued"`) {
+		t.Fatalf("task status = %d, %q", status.Code, status.Body.String())
+	}
+	canceled := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(canceled, httptest.NewRequest(http.MethodPost, "/tasks/"+tasks[0].ID+"/cancel", nil))
+	if canceled.Code != http.StatusSeeOther {
+		t.Fatalf("cancel status = %d", canceled.Code)
+	}
+	retried := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(retried, httptest.NewRequest(http.MethodPost, "/tasks/"+tasks[0].ID+"/retry", nil))
+	if retried.Code != http.StatusSeeOther {
+		t.Fatalf("retry status = %d", retried.Code)
+	}
+	tasks, err = taskService.List(context.Background(), result.Book.ID)
+	if err != nil || len(tasks) != 2 || tasks[0].RetryOfTaskID != tasks[1].ID || tasks[0].Status != task.Queued || tasks[1].Status != task.Canceled {
+		t.Fatalf("tasks after retry = %#v, %v", tasks, err)
+	}
 	legacy := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(legacy, httptest.NewRequest(http.MethodPost, "/convert", strings.NewReader(form.Encode())))
 	if legacy.Code != http.StatusNotFound {
 		t.Fatalf("legacy convert status = %d", legacy.Code)
+	}
+}
+
+func TestDownloadsUseFileIDAndKindleMuxRemainsReadOnly(t *testing.T) {
+	handler, service, _ := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("download body")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	download := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/files/"+result.Book.Original.ID+"/download", nil))
+	if download.Code != http.StatusOK || download.Body.String() != "download body" || !strings.Contains(download.Header().Get("Content-Disposition"), "book.txt") {
+		t.Fatalf("download = %d, %q, %q", download.Code, download.Body.String(), download.Header().Get("Content-Disposition"))
+	}
+	legacy := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/download/"+result.Book.ID+"/original", nil))
+	if legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy download status = %d", legacy.Code)
+	}
+	kindleMutation := httptest.NewRecorder()
+	handler.KindleMux().ServeHTTP(kindleMutation, httptest.NewRequest(http.MethodGet, "/tasks", nil))
+	if kindleMutation.Code != http.StatusNotFound {
+		t.Fatalf("Kindle task route status = %d", kindleMutation.Code)
 	}
 }
 
@@ -127,7 +174,7 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service)
 	t.Cleanup(func() { _ = service.Close() })
 	taskService := task.NewService(storage)
 	generationService := generation.NewService(service, taskService, txtconfig.Defaults())
-	return Handler{Library: service, Generation: generationService}, service, taskService
+	return Handler{Library: service, Generation: generationService, Tasks: taskService}, service, taskService
 }
 
 func multipartRequest(t *testing.T, target, name, content string) *http.Request {
