@@ -39,7 +39,7 @@ func (h Handler) WebMux() http.Handler {
 func (h Handler) KindleMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.handleKindleIndex)
-	mux.HandleFunc("/files/", h.handleFileRoute)
+	mux.HandleFunc("/files/", h.handleKindleFileRoute)
 	return mux
 }
 
@@ -48,11 +48,19 @@ func (h Handler) handleWebIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	records := h.recordsFor(r)
+	page, err := h.Library.ListBooks(r.Context(), library.BookQuery{
+		Search: r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"), Page: parseInt(r.URL.Query().Get("page")),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := webPageData{
-		Records: h.recordViews(records, false),
-		ShowAll: r.URL.Query().Get("all") == "1",
+		Records: h.recordViews(page.Books, false),
 		Message: r.URL.Query().Get("message"),
+		Query:   r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"),
+		Page: page.Page, PreviousPage: page.Page - 1, NextPage: page.Page + 1,
+		HasPrevious: page.HasPrevious, HasNext: page.HasNext, Total: page.Total,
 	}
 	if token := r.URL.Query().Get("duplicate"); token != "" {
 		if pending, ok := h.Library.PendingDuplicate(token); ok {
@@ -104,6 +112,13 @@ func (h Handler) handleBookRoute(w http.ResponseWriter, r *http.Request) {
 		bookID := strings.TrimSuffix(path, "/generate")
 		if bookID != "" && !strings.Contains(bookID, "/") {
 			h.handleGenerate(w, r, bookID)
+			return
+		}
+	}
+	if r.Method == http.MethodPost && strings.HasSuffix(path, "/delete") {
+		bookID := strings.TrimSuffix(path, "/delete")
+		if bookID != "" && !strings.Contains(bookID, "/") {
+			h.handleDeleteBook(w, r, bookID)
 			return
 		}
 	}
@@ -273,6 +288,22 @@ func (h Handler) handleGenerate(w http.ResponseWriter, r *http.Request, bookID s
 	http.Redirect(w, r, "/books/"+bookID+"?message=task+queued", http.StatusSeeOther)
 }
 
+func (h Handler) handleDeleteBook(w http.ResponseWriter, r *http.Request, bookID string) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if r.Form.Get("confirm") != "delete" {
+		http.Error(w, "deletion confirmation is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.Library.DeleteBook(r.Context(), bookID); err != nil {
+		http.Redirect(w, r, "/books/"+bookID+"?message="+urlMessage(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/books?message=book+deleted", http.StatusSeeOther)
+}
+
 func parseInt(raw string) int {
 	value, _ := strconv.Atoi(strings.TrimSpace(raw))
 	return value
@@ -284,6 +315,37 @@ func parseFloat(raw string) float64 {
 }
 
 func (h Handler) handleFileRoute(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/files/")
+	if strings.HasSuffix(rest, "/delete") && r.Method == http.MethodPost {
+		fileID := strings.TrimSuffix(rest, "/delete")
+		if fileID == "" || strings.Contains(fileID, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		_, file, err := h.Library.DownloadFile(r.Context(), fileID)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if err := h.Library.DeleteFile(r.Context(), fileID); err != nil {
+			http.Redirect(w, r, "/books/"+file.BookID+"?message="+urlMessage(err.Error()), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/books/"+file.BookID+"?message=file+deleted", http.StatusSeeOther)
+		return
+	}
+	h.handleDownload(w, r)
+}
+
+func (h Handler) handleKindleFileRoute(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasSuffix(r.URL.Path, "/download") {
+		http.NotFound(w, r)
+		return
+	}
+	h.handleDownload(w, r)
+}
+
+func (h Handler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -370,20 +432,6 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/books/"+original.BookID+"?message="+urlMessage(message), http.StatusSeeOther)
 }
 
-func (h Handler) recordsFor(r *http.Request) []library.Book {
-	var records []library.Book
-	var err error
-	if r.URL.Query().Get("all") == "1" {
-		records, err = h.Library.AllBooks(r.Context())
-	} else {
-		records, err = h.Library.RecentBooks(r.Context(), time.Now().Add(-recentWindow))
-	}
-	if err != nil {
-		return nil
-	}
-	return records
-}
-
 func (h Handler) recordViews(records []library.Book, kindle bool) []recordView {
 	views := make([]recordView, 0, len(records))
 	for _, record := range records {
@@ -439,6 +487,7 @@ func newFileView(file library.File) fileView {
 		Size:      humanSize(file.Size),
 		URL:       downloadURL(file.ID),
 		CreatedAt: file.CreatedAt.Format("2006-01-02 15:04"),
+		CanDelete: file.Role != "original",
 	}
 }
 
@@ -473,10 +522,17 @@ func urlMessage(message string) string {
 }
 
 type webPageData struct {
-	Records   []recordView
-	ShowAll   bool
-	Message   string
-	Duplicate duplicateView
+	Records      []recordView
+	Message      string
+	Duplicate    duplicateView
+	Query        string
+	Sort         string
+	Page         int
+	PreviousPage int
+	NextPage     int
+	HasPrevious  bool
+	HasNext      bool
+	Total        int
 }
 
 type duplicateView struct {
@@ -521,6 +577,7 @@ type fileView struct {
 	Size      string
 	URL       string
 	CreatedAt string
+	CanDelete bool
 }
 
 type taskView struct {
@@ -601,9 +658,12 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
   </fieldset>
   {{end}}
 
-  <p>
-    {{if .ShowAll}}<a href="/books">Show recent uploads</a>{{else}}<a href="/books?all=1">Show all history</a>{{end}}
-  </p>
+  <form method="get" action="/books">
+    <input type="text" name="q" value="{{.Query}}" placeholder="Search book names">
+    <select name="sort"><option value="">Newest first</option><option value="name_asc" {{if eq .Sort "name_asc"}}selected{{end}}>Name A–Z</option><option value="imported_asc" {{if eq .Sort "imported_asc"}}selected{{end}}>Oldest first</option></select>
+    <button type="submit">Apply</button>
+  </form>
+  <p class="muted">{{.Total}} book(s), page {{.Page}}</p>
 
   {{range .Records}}
   <section class="record">
@@ -620,6 +680,7 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
   {{else}}
   <p>No uploads yet.</p>
   {{end}}
+  <p>{{if .HasPrevious}}<a href="/books?q={{urlquery .Query}}&sort={{.Sort}}&page={{.PreviousPage}}">Previous</a>{{end}} {{if .HasNext}}<a href="/books?q={{urlquery .Query}}&sort={{.Sort}}&page={{.NextPage}}">Next</a>{{end}}</p>
 </body>
 </html>`))
 
@@ -669,7 +730,7 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
 
   <h2>Files</h2>
   <table><thead><tr><th>Name</th><th>Role</th><th>Format</th><th>Size</th><th>Created</th></tr></thead><tbody>
-  {{range .Files}}<tr><td><a href="{{.URL}}">{{.Name}}</a></td><td>{{.Kind}}</td><td>{{.Format}}</td><td>{{.Size}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="5">No files.</td></tr>{{end}}
+  {{range .Files}}<tr><td><a href="{{.URL}}">{{.Name}}</a>{{if .CanDelete}} <form class="inline" method="post" action="/files/{{.ID}}/delete"><button type="submit">Delete</button></form>{{end}}</td><td>{{.Kind}}</td><td>{{.Format}}</td><td>{{.Size}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="5">No files.</td></tr>{{end}}
   </tbody></table>
 
   <h2>Tasks</h2>
@@ -679,6 +740,11 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
     {{if .CanRetry}}<form class="inline" method="post" action="/tasks/{{.ID}}/retry"><button type="submit">Retry from beginning</button></form>{{end}}
   </td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
   </tbody></table>
+  <details>
+    <summary>Delete this book</summary>
+    <p class="error">This permanently deletes the imported copy, all revisions, artifacts, reports, and task history. The file you originally imported from outside this library is not affected.</p>
+    <form method="post" action="/books/{{.Book.ID}}/delete"><label><input type="checkbox" name="confirm" value="delete" required> I understand this cannot be undone.</label><button type="submit">Delete book</button></form>
+  </details>
   <script>
     const active = [...document.querySelectorAll('[data-task-id]')].filter(row => ['queued','running'].includes(row.dataset.taskStatus));
     if (active.length) setTimeout(async () => {

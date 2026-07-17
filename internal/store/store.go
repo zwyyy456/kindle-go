@@ -149,6 +149,9 @@ func (s *Store) Initialize(ctx context.Context) error {
 	if err := s.reconcilePendingFiles(ctx); err != nil {
 		return err
 	}
+	if err := s.reconcileDeletingBooks(ctx); err != nil {
+		return err
+	}
 	return s.cleanupIncoming()
 }
 
@@ -215,6 +218,41 @@ func (s *Store) AllBooks(ctx context.Context) ([]Book, error) {
 
 func (s *Store) RecentBooks(ctx context.Context, cutoff time.Time) ([]Book, error) {
 	return s.listBooks(ctx, `WHERE b.state = 'active' AND b.imported_at >= ? ORDER BY b.imported_at DESC, b.id DESC`, formatTime(cutoff))
+}
+
+func (s *Store) BooksPage(ctx context.Context, search, sortOrder string, limit, offset int) ([]Book, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	where := `WHERE b.state = 'active'`
+	var args []any
+	if strings.TrimSpace(search) != "" {
+		where += ` AND b.display_name LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLike(strings.TrimSpace(search))+"%")
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books b `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	order := ` ORDER BY b.imported_at DESC, b.id DESC`
+	switch sortOrder {
+	case "name_asc":
+		order = ` ORDER BY b.display_name COLLATE NOCASE ASC, b.id ASC`
+	case "imported_asc":
+		order = ` ORDER BY b.imported_at ASC, b.id ASC`
+	}
+	queryArgs := append(append([]any(nil), args...), limit, offset)
+	books, err := s.listBooks(ctx, where+order+` LIMIT ? OFFSET ?`, queryArgs...)
+	return books, total, err
+}
+
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
 }
 
 func (s *Store) listBooks(ctx context.Context, where string, args ...any) ([]Book, error) {

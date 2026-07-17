@@ -38,6 +38,22 @@ type KindleBook struct {
 	File File
 }
 
+type BookQuery struct {
+	Search   string
+	Sort     string
+	Page     int
+	PageSize int
+}
+
+type BookPage struct {
+	Books       []Book
+	Page        int
+	PageSize    int
+	Total       int
+	HasPrevious bool
+	HasNext     bool
+}
+
 type Book struct {
 	ID              string
 	DisplayName     string

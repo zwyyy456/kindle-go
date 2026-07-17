@@ -138,6 +138,38 @@ func TestSameNameDifferentContentIsNotDuplicate(t *testing.T) {
 	}
 }
 
+func TestListBooksUsesStablePaginationSortAndLiteralSearch(t *testing.T) {
+	service, _ := newTestService(t)
+	for index, value := range []struct{ name, content string }{
+		{name: "Charlie.txt", content: "three"},
+		{name: "Alpha.txt", content: "one"},
+		{name: "100%.txt", content: "percent"},
+	} {
+		_, err := service.Import(context.Background(), ImportRequest{
+			Filename: value.name, Reader: strings.NewReader(value.content),
+			Now: time.Date(2026, 7, 17, 8, index, 0, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := service.ListBooks(context.Background(), BookQuery{Sort: "name_asc", Page: 1, PageSize: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Total != 3 || len(first.Books) != 2 || first.Books[0].DisplayName != "100%.txt" || first.Books[1].DisplayName != "Alpha.txt" || !first.HasNext || first.HasPrevious {
+		t.Fatalf("first page = %#v", first)
+	}
+	second, err := service.ListBooks(context.Background(), BookQuery{Sort: "name_asc", Page: 2, PageSize: 2})
+	if err != nil || len(second.Books) != 1 || second.Books[0].DisplayName != "Charlie.txt" || !second.HasPrevious || second.HasNext {
+		t.Fatalf("second page = %#v, %v", second, err)
+	}
+	search, err := service.ListBooks(context.Background(), BookQuery{Search: "%", PageSize: 50})
+	if err != nil || search.Total != 1 || search.Books[0].DisplayName != "100%.txt" {
+		t.Fatalf("literal search = %#v, %v", search, err)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, string) {
 	t.Helper()
 	root := t.TempDir()

@@ -90,6 +90,14 @@ func (s *Service) DownloadFile(ctx context.Context, id string) (string, File, er
 	return path, fileFromStore(file), err
 }
 
+func (s *Service) DeleteBook(ctx context.Context, id string) error {
+	return s.store.DeleteBook(ctx, id)
+}
+
+func (s *Service) DeleteFile(ctx context.Context, id string) error {
+	return s.store.DeleteArtifact(ctx, id)
+}
+
 func (s *Service) LatestKindleFiles(ctx context.Context, showEPUB bool) ([]KindleBook, error) {
 	books, err := s.store.AllBooks(ctx)
 	if err != nil {
@@ -134,6 +142,28 @@ func (s *Service) AllBooks(ctx context.Context) ([]Book, error) {
 func (s *Service) RecentBooks(ctx context.Context, cutoff time.Time) ([]Book, error) {
 	books, err := s.store.RecentBooks(ctx, cutoff)
 	return booksFromStore(books), err
+}
+
+func (s *Service) ListBooks(ctx context.Context, query BookQuery) (BookPage, error) {
+	page := query.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := query.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	books, total, err := s.store.BooksPage(ctx, query.Search, query.Sort, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return BookPage{}, err
+	}
+	return BookPage{
+		Books: booksFromStore(books), Page: page, PageSize: pageSize, Total: total,
+		HasPrevious: page > 1, HasNext: page*pageSize < total,
+	}, nil
 }
 
 func booksFromStore(values []store.Book) []Book {

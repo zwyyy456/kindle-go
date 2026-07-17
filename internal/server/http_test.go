@@ -164,6 +164,30 @@ func TestDownloadsUseFileIDAndKindleMuxRemainsReadOnly(t *testing.T) {
 	}
 }
 
+func TestBookDeletionRequiresConfirmationAndRemovesBook(t *testing.T) {
+	handler, service, _ := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("source")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingConfirmation := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(missingConfirmation, httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/delete", nil))
+	if missingConfirmation.Code != http.StatusBadRequest {
+		t.Fatalf("missing confirmation status = %d", missingConfirmation.Code)
+	}
+	form := url.Values{"confirm": {"delete"}}
+	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	deleted := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(deleted, request)
+	if deleted.Code != http.StatusSeeOther || !strings.Contains(deleted.Header().Get("Location"), "deleted") {
+		t.Fatalf("delete response = %d, %q", deleted.Code, deleted.Header().Get("Location"))
+	}
+	if _, ok, err := service.GetBook(context.Background(), result.Book.ID); err != nil || ok {
+		t.Fatalf("deleted book = %v, %v", ok, err)
+	}
+}
+
 func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service) {
 	t.Helper()
 	storage, err := store.Open(t.TempDir())
