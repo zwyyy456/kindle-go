@@ -12,6 +12,13 @@ The confirmed Web UI v1 product direction and functional requirements are docume
 [`docs/product-design.md`](docs/product-design.md). The sections below describe the functionality
 that is currently implemented.
 
+The planned AI proofreading workflow is started through a locally installed and logged-in Codex
+CLI. Model requests and content handling follow the user's current Codex CLI and account
+configuration; the Web UI does not store a separate model API key.
+
+The Web UI v1 implementation order and milestone acceptance checks are documented in
+[`docs/development-plan.md`](docs/development-plan.md).
+
 ## Project Layout
 
 - `main.go`: top-level CLI dispatch only.
