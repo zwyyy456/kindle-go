@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidates", "glossary"],
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["batch_id", "location", "occurrence", "original", "proposed", "category", "confidence", "reason", "context"],
+        "properties": {
+          "batch_id": {"type": "string"},
+          "location": {"type": "string"},
+          "occurrence": {"type": "integer", "minimum": 1},
+          "original": {"type": "string"},
+          "proposed": {"type": "string"},
+          "category": {"type": "string"},
+          "confidence": {"type": "string", "enum": ["high", "review"]},
+          "reason": {"type": "string"},
+          "context": {"type": "string"}
+        }
+      }
+    },
+    "glossary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["term", "type", "batch_id"],
+        "properties": {
+          "term": {"type": "string"},
+          "type": {"type": "string"},
+          "batch_id": {"type": "string"}
+        }
+      }
+    }
+  }
+}

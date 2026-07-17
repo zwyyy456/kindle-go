@@ -16,6 +16,7 @@ import (
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	"github.com/flashdict/kindle2flashdict/internal/proofread"
 	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/store"
 	"github.com/flashdict/kindle2flashdict/internal/task"
@@ -348,7 +349,12 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service)
 		t.Fatal(err)
 	}
 	generationService := generation.NewService(service, taskService, txtconfig.Defaults(), settingsService)
-	return Handler{Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService}, service, taskService
+	return Handler{
+		Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService,
+		Diagnostics: func(context.Context) proofread.DependencyDiagnostics {
+			return proofread.DependencyDiagnostics{PythonPath: "/python3", PythonVersion: "Python test", CodexPath: "/codex", CodexVersion: "codex test"}
+		},
+	}, service, taskService
 }
 
 func multipartRequest(t *testing.T, target, name, content string) *http.Request {

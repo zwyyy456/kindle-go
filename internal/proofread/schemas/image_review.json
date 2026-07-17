@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidates"],
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["image_usage_id", "category", "confidence", "proposed", "reason"],
+        "properties": {
+          "image_usage_id": {"type": "string"},
+          "category": {"type": "string", "enum": ["external_ad_image", "mixed_ad_image"]},
+          "confidence": {"type": "string", "enum": ["high", "review"]},
+          "proposed": {"type": "string", "enum": ["remove_reference", "keep"]},
+          "reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}

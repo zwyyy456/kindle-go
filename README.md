@@ -12,9 +12,13 @@ The confirmed Web UI v1 product direction and functional requirements are docume
 [`docs/product-design.md`](docs/product-design.md). The sections below describe the functionality
 that is currently implemented.
 
-The planned AI proofreading workflow is started through a locally installed and logged-in Codex
-CLI. Model requests and content handling follow the user's current Codex CLI and account
-configuration; the Web UI does not store a separate model API key.
+AI proofreading calls a locally installed and logged-in `codex` CLI. The app starts isolated
+`codex exec` processes with structured JSON output for first review, independent verification,
+and EPUB image review; it does not call a separate model API or store an API key. Codex
+authentication is reused, while user/project instructions and hooks are ignored for these calls so
+they cannot change the proofreading protocol. `python3` runs the bundled deterministic TXT/EPUB
+workflow scripts. The Settings page reports whether both executables are available and holds the
+global model, batch-size, and concurrency defaults.
 
 The Web UI v1 implementation order and milestone acceptance checks are documented in
 [`docs/development-plan.md`](docs/development-plan.md).
@@ -29,6 +33,8 @@ The Web UI v1 implementation order and milestone acceptance checks are documente
 - `internal/txt2epub`: TXT cleaning and chapter parsing.
 - `internal/epub`: shared EPUB reader and writer.
 - `internal/azw3`: native AZW3/KF8 writer.
+- `internal/proofread`: bundled workflow process runner and structured Codex CLI adapter.
+- `internal/settings`: persisted Web UI defaults and dependency diagnostics.
 - `internal/txt2epub/cmd`: `txt2epub` command-line flags.
 - `internal/server`: local upload library, conversion Web UI, and Kindle download page.
 - `internal/server/cmd`: `serve` command-line flags.
@@ -157,6 +163,16 @@ Kindle:
   http://192.168.1.23:8788/
 ```
 
-Use the desktop Web UI to upload files and explicitly convert them. Uploading only saves the original file; conversion runs synchronously after pressing Convert. TXT can be converted to EPUB or native AZW3. Reflowable text EPUB can be converted to AZW3 with the native reader and writer. Each uploaded book is shown as the original file plus the latest converted output.
+Use the desktop Web UI to import immutable TXT/EPUB source copies. TXT preview is synchronous;
+EPUB import saves a structured AZW3 compatibility report. EPUB/AZW3 generation runs in the
+persistent background task queue, and every successful output and its parameter snapshot is kept.
+Failed or canceled tasks can be retried from the beginning.
 
-The Kindle page is deliberately plain HTML. It lists the latest Kindle-suitable output for each book, falling back to the original file when the original is already Kindle-suitable. Kindle-suitable formats are AZW3, MOBI, PDF, and TXT; EPUB outputs remain visible in the desktop Web UI but are hidden from the Kindle page because Kindle devices do not directly read downloaded EPUB files.
+The Settings page stores global TXT defaults, proofreading defaults, and the Kindle EPUB switch in
+the library database. Per-book form changes affect only that preview or generation and are not
+saved as book-level configuration.
+
+The Kindle page is deliberately plain HTML. By default it lists the latest AZW3 for each book.
+When “Show latest EPUB” is enabled globally, the latest EPUB is shown alongside the AZW3 for
+KOReader and similar readers. Legacy MOBI/PDF originals remain downloadable after library
+migration.

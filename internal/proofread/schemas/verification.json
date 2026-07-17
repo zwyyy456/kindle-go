@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidate_id", "verdict", "proposed", "reason", "review_mode", "reviewer"],
+  "properties": {
+    "candidate_id": {"type": "string"},
+    "verdict": {"type": "string", "enum": ["high", "review", "reject"]},
+    "proposed": {"type": "string"},
+    "reason": {"type": "string"},
+    "review_mode": {"type": "string", "enum": ["independent_subagent", "same_model_isolated"]},
+    "reviewer": {"type": "string"}
+  }
+}

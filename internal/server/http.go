@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	"github.com/flashdict/kindle2flashdict/internal/proofread"
 	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
@@ -22,10 +24,11 @@ import (
 const recentWindow = 24 * time.Hour
 
 type Handler struct {
-	Library    *library.Service
-	Generation *generation.Service
-	Tasks      *task.Service
-	Settings   *appsettings.Service
+	Library     *library.Service
+	Generation  *generation.Service
+	Tasks       *task.Service
+	Settings    *appsettings.Service
+	Diagnostics func(context.Context) proofread.DependencyDiagnostics
 }
 
 func (h Handler) WebMux() http.Handler {
@@ -391,8 +394,12 @@ func (h Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	diagnostics := proofread.DiagnoseDependencies(r.Context(), nil, "", "")
+	if h.Diagnostics != nil {
+		diagnostics = h.Diagnostics(r.Context())
+	}
 	data := settingsPageData{
-		Values: values, Runtime: h.Settings.Runtime(), Diagnostics: appsettings.BasicDiagnostics(),
+		Values: values, Runtime: h.Settings.Runtime(), Diagnostics: diagnostics,
 		Message: r.URL.Query().Get("message"), DropRegex: strings.Join(values.TXT.DropRegex, "\n"),
 	}
 	replacements, _ := json.Marshal(values.TXT.Replace)
@@ -694,7 +701,7 @@ type bookPageData struct {
 type settingsPageData struct {
 	Values      appsettings.Values
 	Runtime     appsettings.Runtime
-	Diagnostics appsettings.Diagnostics
+	Diagnostics proofread.DependencyDiagnostics
 	Message     string
 	DropRegex   string
 	ReplaceJSON string
@@ -980,7 +987,7 @@ label { display: block; margin: 8px 0; } input[type=text], input[type=number], t
 <label>Concurrency <input type="number" name="proofread_concurrency" min="1" max="16" value="{{.Values.Proofread.Concurrency}}" required></label>
 </fieldset>
 <button type="submit">Save global defaults</button></form>
-<fieldset><legend>Basic diagnostics</legend><p>python3: {{if .Diagnostics.PythonPath}}{{.Diagnostics.PythonPath}}{{else}}not found{{end}}</p><p>Codex CLI: {{if .Diagnostics.CodexPath}}{{.Diagnostics.CodexPath}}{{else}}not found{{end}}</p><p class="muted">Codex login/model availability is checked explicitly before proofreading; this page does not send book content.</p></fieldset>
+<fieldset><legend>Dependency diagnostics</legend><p>python3: {{if .Diagnostics.PythonPath}}{{.Diagnostics.PythonPath}} — {{.Diagnostics.PythonVersion}}{{else}}not found{{end}}</p><p>Codex CLI: {{if .Diagnostics.CodexPath}}{{.Diagnostics.CodexPath}} — {{.Diagnostics.CodexVersion}}{{else}}not found{{end}}</p><p>Required non-interactive flags: {{if .Diagnostics.CodexFlagsReady}}available{{else}}missing or unsupported{{end}}</p><p class="muted">Codex login/model availability is checked explicitly before proofreading; this page does not send book content.</p></fieldset>
 </body></html>`))
 
 var txtPreviewTemplate = template.Must(template.New("txt-preview").Parse(`<!doctype html>
