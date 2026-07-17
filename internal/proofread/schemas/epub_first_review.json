@@ -9,10 +9,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["batch_id", "line", "occurrence", "original", "proposed", "category", "confidence", "reason", "context"],
+        "required": ["batch_id", "block_id", "occurrence", "original", "proposed", "category", "confidence", "reason", "context"],
         "properties": {
           "batch_id": {"type": "string"},
-          "line": {"type": "integer", "minimum": 1},
+          "block_id": {"type": "string"},
           "occurrence": {"type": "integer", "minimum": 1},
           "original": {"type": "string"},
           "proposed": {"type": "string"},

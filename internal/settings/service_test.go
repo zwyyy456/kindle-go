@@ -23,7 +23,7 @@ func TestInitializeSeedsConfigAndSavedValuesOverrideFutureConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	values, err := service.Current(context.Background())
-	if err != nil || values.Author != "配置作者" || values.Style.LineHeight != 1.9 || values.Proofread.Concurrency != 3 {
+	if err != nil || values.Author != "配置作者" || values.Style.LineHeight != 1.9 || values.Proofread.BatchSize != 12000 || values.Proofread.Concurrency != 3 {
 		t.Fatalf("seeded values = %#v, %v", values, err)
 	}
 	values.Author = "数据库作者"
@@ -54,7 +54,7 @@ func TestSaveRejectsInvalidRangesAndRegex(t *testing.T) {
 		t.Fatalf("invalid regex error = %v", err)
 	}
 	values = service.seed
-	values.Proofread.Concurrency = 17
+	values.Proofread.Concurrency = 9
 	if err := service.Save(context.Background(), values); err == nil || !strings.Contains(err.Error(), "concurrency") {
 		t.Fatalf("invalid concurrency error = %v", err)
 	}

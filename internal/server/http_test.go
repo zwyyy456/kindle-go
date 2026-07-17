@@ -145,6 +145,29 @@ func TestWebGenerateCreatesTaskAndLegacyConvertRouteIsGone(t *testing.T) {
 	}
 }
 
+func TestWebStartsSingleActiveProofreadTaskWithSettingsSnapshot(t *testing.T) {
+	handler, service, taskService := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/proofreads", nil)
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "queued") {
+		t.Fatalf("proofread response = %d, %q", response.Code, response.Header().Get("Location"))
+	}
+	tasks, err := taskService.List(context.Background(), result.Book.ID)
+	if err != nil || len(tasks) != 1 || tasks[0].Type != task.Proofread || tasks[0].Status != task.Queued || !strings.Contains(tasks[0].ParametersJSON, `"batch_size":12000`) {
+		t.Fatalf("proofread task = %#v, %v", tasks, err)
+	}
+	duplicate := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(duplicate, httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/proofreads", nil))
+	if duplicate.Code != http.StatusSeeOther || !strings.Contains(duplicate.Header().Get("Location"), "already+has+an+active") {
+		t.Fatalf("duplicate proofread = %d, %q", duplicate.Code, duplicate.Header().Get("Location"))
+	}
+}
+
 func TestDownloadsUseFileIDAndKindleMuxRemainsReadOnly(t *testing.T) {
 	handler, service, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("download body")})
@@ -258,7 +281,7 @@ func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
 		"merge_lines": {"1"}, "trim_blank_lines": {"1"}, "replace_json": {"[]"},
 		"line_height": {"1.8"}, "paragraph_indent": {values.Style.ParagraphIndent},
 		"paragraph_spacing": {values.Style.ParagraphSpacing}, "text_align": {values.Style.TextAlign},
-		"kindle_show_epub": {"1"}, "proofread_batch_size": {"20"}, "proofread_concurrency": {"3"},
+		"kindle_show_epub": {"1"}, "proofread_batch_size": {"12000"}, "proofread_concurrency": {"3"},
 	}
 	settingsRequest := httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(settingsForm.Encode()))
 	settingsRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -349,8 +372,9 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service)
 		t.Fatal(err)
 	}
 	generationService := generation.NewService(service, taskService, txtconfig.Defaults(), settingsService)
+	proofreadService := proofread.NewService(service, taskService, settingsService)
 	return Handler{
-		Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService,
+		Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService, Proofreads: proofreadService,
 		Diagnostics: func(context.Context) proofread.DependencyDiagnostics {
 			return proofread.DependencyDiagnostics{PythonPath: "/python3", PythonVersion: "Python test", CodexPath: "/codex", CodexVersion: "codex test"}
 		},

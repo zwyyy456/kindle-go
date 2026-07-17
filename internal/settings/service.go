@@ -51,7 +51,7 @@ func New(source *store.Store, base txtconfig.Config, runtime Runtime) *Service {
 		store: source,
 		seed: Values{
 			Author: base.Metadata.Author, Language: base.Metadata.Language, Cover: base.Output.Cover, TXT: base.TXT, Style: base.Style,
-			Proofread: Proofread{BatchSize: 20, Concurrency: 3},
+			Proofread: Proofread{BatchSize: 12000, Concurrency: 3},
 		},
 		runtime: runtime,
 		now:     time.Now,
@@ -165,11 +165,11 @@ func Validate(values Values) error {
 	default:
 		return fmt.Errorf("text align must be left, right, center, or justify")
 	}
-	if values.Proofread.BatchSize < 1 || values.Proofread.BatchSize > 200 {
-		return fmt.Errorf("proofread batch size must be between 1 and 200")
+	if values.Proofread.BatchSize < 1000 || values.Proofread.BatchSize > 50000 {
+		return fmt.Errorf("proofread batch size must be between 1000 and 50000 characters")
 	}
-	if values.Proofread.Concurrency < 1 || values.Proofread.Concurrency > 16 {
-		return fmt.Errorf("proofread concurrency must be between 1 and 16")
+	if values.Proofread.Concurrency < 1 || values.Proofread.Concurrency > 8 {
+		return fmt.Errorf("proofread concurrency must be between 1 and 8")
 	}
 	return nil
 }

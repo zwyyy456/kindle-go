@@ -29,6 +29,7 @@ type Handler struct {
 	Tasks       *task.Service
 	Settings    *appsettings.Service
 	Diagnostics func(context.Context) proofread.DependencyDiagnostics
+	Proofreads  *proofread.Service
 }
 
 func (h Handler) WebMux() http.Handler {
@@ -126,6 +127,13 @@ func (h Handler) handleBookRoute(w http.ResponseWriter, r *http.Request) {
 		bookID := strings.TrimSuffix(path, "/txt-preview")
 		if bookID != "" && !strings.Contains(bookID, "/") {
 			h.handleTXTPreview(w, r, bookID)
+			return
+		}
+	}
+	if r.Method == http.MethodPost && strings.HasSuffix(path, "/proofreads") {
+		bookID := strings.TrimSuffix(path, "/proofreads")
+		if bookID != "" && !strings.Contains(bookID, "/") {
+			h.handleCreateProofread(w, r, bookID)
 			return
 		}
 	}
@@ -344,6 +352,18 @@ func (h Handler) handleTXTPreview(w http.ResponseWriter, r *http.Request, bookID
 	if err := txtPreviewTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (h Handler) handleCreateProofread(w http.ResponseWriter, r *http.Request, bookID string) {
+	if h.Proofreads == nil {
+		http.Error(w, "proofreading service is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if _, err := h.Proofreads.Create(r.Context(), bookID); err != nil {
+		http.Redirect(w, r, "/books/"+bookID+"?message="+urlMessage("proofread failed: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/books/"+bookID+"?message=proofread+task+queued", http.StatusSeeOther)
 }
 
 func generationOptionsFromForm(r *http.Request) generation.Options {
@@ -900,6 +920,8 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
     </form>
   </fieldset>{{else}}<p class="error">AZW3 generation is unavailable because this EPUB did not pass compatibility analysis.</p>{{end}}
 
+  <form method="post" action="/books/{{.Book.ID}}/proofreads"><button type="submit">Start AI proofreading with Codex CLI</button></form>
+
   {{with .Compatibility}}
   <h2>EPUB compatibility: {{.Status}}</h2>
   <p>Title: {{.Metadata.Title}} · Author: {{.Metadata.Author}} · Language: {{.Metadata.Language}}</p>
@@ -983,8 +1005,8 @@ label { display: block; margin: 8px 0; } input[type=text], input[type=number], t
 <fieldset><legend>Kindle page</legend><label><input type="checkbox" name="kindle_show_epub" value="1" {{if .Values.KindleShowEPUB}}checked{{end}}> Show latest EPUB alongside latest AZW3</label></fieldset>
 <fieldset><legend>Proofreading defaults</legend>
 <label>Codex model (blank uses Codex default) <input type="text" name="proofread_model" value="{{.Values.Proofread.Model}}"></label>
-<label>Batch size <input type="number" name="proofread_batch_size" min="1" max="200" value="{{.Values.Proofread.BatchSize}}" required></label>
-<label>Concurrency <input type="number" name="proofread_concurrency" min="1" max="16" value="{{.Values.Proofread.Concurrency}}" required></label>
+<label>Batch size (characters) <input type="number" name="proofread_batch_size" min="1000" max="50000" value="{{.Values.Proofread.BatchSize}}" required></label>
+<label>Concurrency <input type="number" name="proofread_concurrency" min="1" max="8" value="{{.Values.Proofread.Concurrency}}" required></label>
 </fieldset>
 <button type="submit">Save global defaults</button></form>
 <fieldset><legend>Dependency diagnostics</legend><p>python3: {{if .Diagnostics.PythonPath}}{{.Diagnostics.PythonPath}} — {{.Diagnostics.PythonVersion}}{{else}}not found{{end}}</p><p>Codex CLI: {{if .Diagnostics.CodexPath}}{{.Diagnostics.CodexPath}} — {{.Diagnostics.CodexVersion}}{{else}}not found{{end}}</p><p>Required non-interactive flags: {{if .Diagnostics.CodexFlagsReady}}available{{else}}missing or unsupported{{end}}</p><p class="muted">Codex login/model availability is checked explicitly before proofreading; this page does not send book content.</p></fieldset>

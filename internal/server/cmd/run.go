@@ -9,6 +9,7 @@ import (
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	"github.com/flashdict/kindle2flashdict/internal/proofread"
 	"github.com/flashdict/kindle2flashdict/internal/server"
 	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/store"
@@ -77,15 +78,19 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	taskService := task.NewService(storage)
 	generationService := generation.NewService(libraryService, taskService, baseCfg, settingsService)
 	generationExecutor := generation.NewExecutor(libraryService)
+	proofreadService := proofread.NewService(libraryService, taskService, settingsService)
+	proofreadExecutor := proofread.NewExecutor(storage, libraryService, nil, nil)
 	runner := task.NewRunner(taskService, map[task.Type]task.Executor{
 		task.GenerateEPUB: generationExecutor,
 		task.GenerateAZW3: generationExecutor,
+		task.Proofread:    proofreadExecutor,
 	})
 	handler := server.Handler{
 		Library:    libraryService,
 		Generation: generationService,
 		Tasks:      taskService,
 		Settings:   settingsService,
+		Proofreads: proofreadService,
 	}
 	srv := server.Server{
 		Config: server.Config{
