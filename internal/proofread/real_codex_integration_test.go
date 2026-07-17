@@ -88,8 +88,15 @@ func TestRealCodexTXTAndEPUBAcceptance(t *testing.T) {
 			}
 			for _, role := range []string{"revision", "report", "audit"} {
 				file := fileByRole(t, files, role)
-				if file.ID == "" || file.Size == 0 || strings.TrimSpace(file.SHA256) == "" {
+				if file.ID == "" || strings.TrimSpace(file.SHA256) == "" {
 					t.Fatalf("%s deliverable = %#v", role, file)
+				}
+				data := downloadBytes(t, libraryService, file.ID)
+				if int64(len(data)) != file.Size {
+					t.Fatalf("%s downloaded size = %d, want %d", role, len(data), file.Size)
+				}
+				if role != "audit" && file.Size == 0 {
+					t.Fatalf("%s deliverable is empty", role)
 				}
 			}
 			if imported.Book.SourceFormat == "epub" {
