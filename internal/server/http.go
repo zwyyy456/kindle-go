@@ -259,7 +259,8 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 			InputFormat:  detail.Book.SourceFormat,
 			TitleDefault: strings.TrimSuffix(detail.Book.Original.DisplayName, filepath.Ext(detail.Book.Original.DisplayName)),
 		},
-		Files: files, Tasks: taskViews(tasks), Message: r.URL.Query().Get("message"),
+		Files: files, Tasks: taskViews(tasks), Message: r.URL.Query().Get("message"), Compatibility: detail.Compatibility,
+		CanGenerate: detail.Book.SourceFormat == "txt" || (detail.Compatibility != nil && detail.Compatibility.Status == "passed"),
 	}
 	if err := bookTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -589,10 +590,12 @@ type kindlePageData struct {
 }
 
 type bookPageData struct {
-	Book    recordView
-	Files   []fileView
-	Tasks   []taskView
-	Message string
+	Book          recordView
+	Files         []fileView
+	Tasks         []taskView
+	Message       string
+	Compatibility *library.CompatibilityReport
+	CanGenerate   bool
 }
 
 type tasksPageData struct {
@@ -761,7 +764,7 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
   <p class="muted">Imported {{.Book.UploadedAt}} · {{.Book.InputFormat}}</p>
   {{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
 
-  <fieldset>
+  {{if .CanGenerate}}<fieldset>
     <legend>Generate</legend>
     <form method="post" action="/books/{{.Book.ID}}/generate">
       <label><input type="checkbox" name="format" value="azw3" checked> AZW3</label>
@@ -781,7 +784,17 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
       {{if eq .Book.InputFormat "txt"}}<button type="submit" formaction="/books/{{.Book.ID}}/txt-preview">Preview TXT</button>{{end}}
       <button type="submit">Queue generation</button>
     </form>
-  </fieldset>
+  </fieldset>{{else}}<p class="error">AZW3 generation is unavailable because this EPUB did not pass compatibility analysis.</p>{{end}}
+
+  {{with .Compatibility}}
+  <h2>EPUB compatibility: {{.Status}}</h2>
+  <p>Title: {{.Metadata.Title}} · Author: {{.Metadata.Author}} · Language: {{.Metadata.Language}}</p>
+  {{if .Cover.ImageHref}}<p>Cover: {{.Cover.ImageHref}}</p>{{end}}
+  <h3>Spine</h3><ul>{{range .Spine}}<li>{{.Href}} — {{.MediaType}} {{if .Title}}— {{.Title}}{{end}}</li>{{else}}<li>No readable spine items.</li>{{end}}</ul>
+  <h3>Table of contents</h3><ul>{{range .TOC}}<li>{{.Title}} — {{.Href}}</li>{{else}}<li>No table of contents.</li>{{end}}</ul>
+  <h3>Resources</h3><ul>{{range .Resources}}<li>{{.Href}} — {{.MediaType}} — {{.Size}} bytes {{if not .Exists}}(missing){{end}}</li>{{end}}</ul>
+  {{if .Issues}}<h3>Blocking issues</h3><ul>{{range .Issues}}<li class="error"><strong>{{.Code}}</strong> [{{.Stage}}] {{.Message}}{{if .Document}} — document: {{.Document}}{{end}}{{if .Resource}} — resource: {{.Resource}}{{end}}</li>{{end}}</ul>{{end}}
+  {{end}}
 
   <h2>Files</h2>
   <table><thead><tr><th>Name</th><th>Role</th><th>Format</th><th>Size</th><th>Created</th></tr></thead><tbody>

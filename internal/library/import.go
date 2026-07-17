@@ -3,6 +3,7 @@ package library
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flashdict/kindle2flashdict/internal/epub"
 	"github.com/flashdict/kindle2flashdict/internal/store"
 	txttext "github.com/flashdict/kindle2flashdict/internal/txt2epub/text"
 )
@@ -69,6 +71,10 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 		return ImportResult{}, err
 	}
 	keep = true
+	if err := s.persistCompatibility(ctx, book); err != nil {
+		_ = s.store.DeleteBook(context.Background(), book.ID)
+		return ImportResult{}, err
+	}
 	return ImportResult{Book: bookFromStore(book)}, nil
 }
 
@@ -97,6 +103,10 @@ func (s *Service) ConfirmImport(ctx context.Context, token, action string) (Book
 			_ = s.store.DiscardIncoming(pending.incoming)
 			return Book{}, err
 		}
+		if err := s.persistCompatibility(ctx, book); err != nil {
+			_ = s.store.DeleteBook(context.Background(), book.ID)
+			return Book{}, err
+		}
 		return bookFromStore(book), nil
 	case "cancel":
 		_ = s.store.DiscardIncoming(pending.incoming)
@@ -105,6 +115,45 @@ func (s *Service) ConfirmImport(ctx context.Context, token, action string) (Book
 		_ = s.store.DiscardIncoming(pending.incoming)
 		return Book{}, fmt.Errorf("unknown duplicate import action %q", action)
 	}
+}
+
+func (s *Service) persistCompatibility(ctx context.Context, book store.Book) error {
+	if book.SourceFormat != "epub" {
+		return nil
+	}
+	filename, err := s.store.ResolveRel(book.Original.RelPath)
+	if err != nil {
+		return err
+	}
+	analysis := epub.Analyze(filename, epub.Options{DefaultLanguage: "zh-CN"})
+	metadata, err := json.Marshal(struct {
+		Metadata epub.MetadataInfo `json:"metadata"`
+		Cover    epub.CoverInfo    `json:"cover"`
+	}{analysis.Metadata, analysis.Cover})
+	if err != nil {
+		return err
+	}
+	spine, err := json.Marshal(analysis.Spine)
+	if err != nil {
+		return err
+	}
+	toc, err := json.Marshal(analysis.TOC)
+	if err != nil {
+		return err
+	}
+	resources, err := json.Marshal(analysis.Resources)
+	if err != nil {
+		return err
+	}
+	issues, err := json.Marshal(analysis.Issues)
+	if err != nil {
+		return err
+	}
+	status := "passed"
+	if !analysis.Compatible() {
+		status = "failed"
+	}
+	return s.store.SaveCompatibility(ctx, store.CompatibilityRecord{FileID: book.Original.ID, SourceSHA256: book.Original.SHA256, Status: status, MetadataJSON: string(metadata), SpineJSON: string(spine), TOCJSON: string(toc), ResourcesJSON: string(resources), IssuesJSON: string(issues), CheckedAt: s.now()})
 }
 
 func (s *Service) PendingDuplicate(token string) (PendingDuplicate, bool) {

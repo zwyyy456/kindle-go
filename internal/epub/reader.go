@@ -1,9 +1,7 @@
 package epub
 
 import (
-	"fmt"
-	"path/filepath"
-	"strings"
+	"errors"
 
 	"github.com/flashdict/kindle2flashdict/internal/ebook"
 )
@@ -13,106 +11,11 @@ type Options struct {
 }
 
 func Read(filename string, opts Options) (ebook.Book, error) {
-	a, err := openArchive(filename)
-	if err != nil {
-		return ebook.Book{}, err
+	analysis := Analyze(filename, opts)
+	if len(analysis.Issues) != 0 {
+		return ebook.Book{}, errors.New(analysis.Issues[0].Message)
 	}
-	defer a.Close()
-
-	opfPath, err := readRootfile(a)
-	if err != nil {
-		return ebook.Book{}, err
-	}
-	pkg, err := readPackage(a, opfPath)
-	if err != nil {
-		return ebook.Book{}, err
-	}
-
-	items := make(map[string]manifestItem, len(pkg.Manifest.Items))
-	for _, item := range pkg.Manifest.Items {
-		items[item.ID] = item
-	}
-
-	book := ebook.Book{Metadata: ebook.Metadata{
-		Title:      firstNonBlank(pkg.Metadata.Titles),
-		Author:     strings.Join(nonBlank(pkg.Metadata.Creators), " & "),
-		Language:   firstNonBlank(pkg.Metadata.Languages),
-		Identifier: firstNonBlank(pkg.Metadata.Identifiers),
-	}}
-	if book.Metadata.Title == "" {
-		book.Metadata.Title = strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
-	}
-	if book.Metadata.Language == "" {
-		book.Metadata.Language = strings.TrimSpace(opts.DefaultLanguage)
-	}
-	book.Cover, err = readCover(a, opfPath, pkg, items)
-	if err != nil {
-		return ebook.Book{}, err
-	}
-
-	for i, ref := range pkg.Spine.ItemRefs {
-		item, ok := items[ref.IDRef]
-		if !ok {
-			return ebook.Book{}, fmt.Errorf("spine item %q is missing from manifest", ref.IDRef)
-		}
-		if item.MediaType != "application/xhtml+xml" && item.MediaType != "text/html" {
-			return ebook.Book{}, fmt.Errorf("unsupported spine media type %q for %q", item.MediaType, item.Href)
-		}
-		docPath, err := resolveReference(opfPath, item.Href)
-		if err != nil {
-			return ebook.Book{}, fmt.Errorf("resolve spine item %q: %w", item.Href, err)
-		}
-		data, err := a.read(referencePath(docPath))
-		if err != nil {
-			return ebook.Book{}, err
-		}
-		body, title, stylesheets, err := xhtmlBody(data, referencePath(docPath))
-		if err != nil {
-			return ebook.Book{}, err
-		}
-		if title == "" {
-			title = fmt.Sprintf("Chapter %d", i+1)
-		}
-		book.Spine = append(book.Spine, ebook.Document{Href: referencePath(docPath), Title: title, Body: body, Stylesheets: stylesheets})
-	}
-	spinePaths := make(map[string]bool, len(book.Spine))
-	for _, doc := range book.Spine {
-		spinePaths[doc.Href] = true
-	}
-
-	book.TOC, err = readTOC(a, opfPath, pkg, items)
-	if err != nil {
-		return ebook.Book{}, err
-	}
-	if err := validateTOCTargets(book.TOC, spinePaths); err != nil {
-		return ebook.Book{}, err
-	}
-	for _, ref := range pkg.Guide.References {
-		href, err := resolveReference(opfPath, ref.Href)
-		if err != nil {
-			return ebook.Book{}, fmt.Errorf("resolve guide reference %q: %w", ref.Href, err)
-		}
-		if spinePaths[referencePath(href)] {
-			book.Guide = append(book.Guide, ebook.GuideRef{Type: ref.Type, Title: ref.Title, Href: href})
-		}
-	}
-	book.Resources, err = readResources(a, &book, opfPath, pkg.Manifest.Items)
-	if err != nil {
-		return ebook.Book{}, err
-	}
-	return book, nil
-}
-
-func validateTOCTargets(entries []ebook.TOCEntry, spinePaths map[string]bool) error {
-	for _, entry := range entries {
-		if !spinePaths[referencePath(entry.Href)] {
-			return fmt.Errorf("TOC target %q is not present in the spine", entry.Href)
-		}
-		if err := validateTOCTargets(entry.Children, spinePaths); err != nil {
-			return err
-		}
-	}
-	return nil
+	return analysis.Book, nil
 }
 
 func readTOC(a *archive, opfPath string, pkg packageDocument, items map[string]manifestItem) ([]ebook.TOCEntry, error) {

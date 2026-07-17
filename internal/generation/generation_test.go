@@ -1,6 +1,8 @@
 package generation
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -130,6 +132,70 @@ func TestGenerationFailsWhenImmutableSourceHashChanges(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestEPUBGenerationRequiresPersistedReportAndRechecksSource(t *testing.T) {
+	storage, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	libraryService := library.New(storage)
+	defer libraryService.Close()
+	taskService := task.NewService(storage)
+	service := NewService(libraryService, taskService, txtconfig.Defaults())
+	valid := generationEPUB(t, false)
+	imported, err := libraryService.Import(context.Background(), library.ImportRequest{Filename: "valid.epub", Reader: bytes.NewReader(valid)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := service.Create(context.Background(), CreateRequest{BookID: imported.Book.ID, Formats: []string{"azw3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	executor := NewExecutor(libraryService)
+	go func() {
+		done <- task.NewRunner(taskService, map[task.Type]task.Executor{task.GenerateAZW3: executor}).Run(ctx)
+	}()
+	waitGenerationStatus(t, taskService, tasks[0].ID, task.Completed)
+	cancel()
+	<-done
+
+	invalid, err := libraryService.Import(context.Background(), library.ImportRequest{Filename: "invalid.epub", Reader: bytes.NewReader(generationEPUB(t, true))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(context.Background(), CreateRequest{BookID: invalid.Book.ID, Formats: []string{"azw3"}}); err == nil || !strings.Contains(err.Error(), "epub_incompatible") {
+		t.Fatalf("incompatible create error = %v", err)
+	}
+}
+
+func generationEPUB(t *testing.T, broken bool) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	files := map[string]string{
+		"META-INF/container.xml": `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+		"book.opf":               `<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>EPUB</dc:title></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>`,
+		"c.xhtml":                `<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文</p></body></html>`,
+	}
+	if broken {
+		delete(files, "c.xhtml")
+	}
+	for name, content := range files {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
 }
 
 func newGenerationTest(t *testing.T) (*store.Store, *library.Service, *task.Service, library.Book) {

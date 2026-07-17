@@ -65,6 +65,34 @@ func TestImportChecksEPUBDeclaredExpandedSize(t *testing.T) {
 	assertIncomingCount(t, root, 0)
 }
 
+func TestEPUBImportPersistsPassedAndFailedCompatibilityReports(t *testing.T) {
+	service, _ := newTestService(t)
+	valid := epubArchive(t, map[string]string{
+		"META-INF/container.xml": `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+		"book.opf":               `<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>兼容书</dc:title></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>`,
+		"c.xhtml":                `<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文</p></body></html>`,
+	})
+	passed, err := service.Import(context.Background(), ImportRequest{Filename: "passed.epub", Reader: bytes.NewReader(valid)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, ok, err := service.GetBookDetail(context.Background(), passed.Book.ID)
+	if err != nil || !ok || detail.Compatibility == nil || detail.Compatibility.Status != "passed" || detail.Compatibility.Metadata.Title != "兼容书" {
+		t.Fatalf("passed report = %#v, %v, %v", detail.Compatibility, ok, err)
+	}
+	invalid := epubArchive(t, map[string]string{
+		"META-INF/container.xml": `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="missing.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+	})
+	failed, err := service.Import(context.Background(), ImportRequest{Filename: "failed.epub", Reader: bytes.NewReader(invalid)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, ok, err = service.GetBookDetail(context.Background(), failed.Book.ID)
+	if err != nil || !ok || detail.Compatibility == nil || detail.Compatibility.Status != "failed" || len(detail.Compatibility.Issues) == 0 || detail.Compatibility.Issues[0].Code == "" {
+		t.Fatalf("failed report = %#v, %v, %v", detail.Compatibility, ok, err)
+	}
+}
+
 func TestDuplicateImportCanOpenExistingOrCreateNewBook(t *testing.T) {
 	service, root := newTestService(t)
 	clock := time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)

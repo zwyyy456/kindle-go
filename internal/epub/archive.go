@@ -10,8 +10,9 @@ import (
 )
 
 type archive struct {
-	closer *zip.ReadCloser
-	files  map[string]*zip.File
+	closer       *zip.ReadCloser
+	files        map[string]*zip.File
+	invalidPaths []string
 }
 
 func openArchive(filename string) (*archive, error) {
@@ -22,7 +23,11 @@ func openArchive(filename string) (*archive, error) {
 	a := &archive{closer: zr, files: make(map[string]*zip.File, len(zr.File))}
 	for _, file := range zr.File {
 		name, err := cleanArchivePath(file.Name)
-		if err != nil || strings.HasSuffix(file.Name, "/") {
+		if err != nil {
+			a.invalidPaths = append(a.invalidPaths, file.Name)
+			continue
+		}
+		if strings.HasSuffix(file.Name, "/") {
 			continue
 		}
 		a.files[name] = file

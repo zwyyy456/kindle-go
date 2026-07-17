@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"io"
@@ -202,6 +203,49 @@ func TestTXTPreviewUsesSubmittedParameters(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "utf-8") || !strings.Contains(response.Body.String(), "第一章 开始") {
 		t.Fatalf("preview = %d, %q", response.Code, response.Body.String())
 	}
+}
+
+func TestIncompatibleEPUBShowsStructuredReportAndBlocksGeneration(t *testing.T) {
+	handler, service, _ := newHTTPTestHandler(t)
+	data := epubArchiveForHTTP(t, map[string]string{
+		"META-INF/container.xml": `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="missing.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+	})
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "bad.epub", Reader: bytes.NewReader(data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/books/"+result.Book.ID, nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "EPUB compatibility: failed") || !strings.Contains(page.Body.String(), "package_resource_missing") || strings.Contains(page.Body.String(), "Queue generation") {
+		t.Fatalf("EPUB detail = %d, %q", page.Code, page.Body.String())
+	}
+	form := url.Values{"format": {"azw3"}}
+	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/generate", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "epub_incompatible") {
+		t.Fatalf("blocked generation = %d, %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func epubArchiveForHTTP(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	for name, content := range files {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(entry, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
 }
 
 func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service) {

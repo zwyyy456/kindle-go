@@ -85,6 +85,15 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 	if !ok {
 		return nil, fmt.Errorf("book %q not found", req.BookID)
 	}
+	if book.SourceFormat == "epub" {
+		detail, _, err := s.library.GetBookDetail(ctx, book.ID)
+		if err != nil {
+			return nil, err
+		}
+		if detail.Compatibility == nil || detail.Compatibility.Status != "passed" {
+			return nil, fmt.Errorf("epub_incompatible: EPUB compatibility report did not pass")
+		}
+	}
 	if len(req.Formats) == 0 {
 		return nil, fmt.Errorf("at least one output format is required")
 	}

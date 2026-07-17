@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/flashdict/kindle2flashdict/internal/epub"
 )
 
 const (
@@ -29,8 +31,20 @@ type File struct {
 }
 
 type BookDetail struct {
-	Book  Book
-	Files []File
+	Book          Book
+	Files         []File
+	Compatibility *CompatibilityReport
+}
+
+type CompatibilityReport struct {
+	FileID, SourceSHA256, Status string
+	Metadata                     epub.MetadataInfo
+	Cover                        epub.CoverInfo
+	Spine                        []epub.SpineInfo
+	TOC                          []epub.TOCInfo
+	Resources                    []epub.ResourceInfo
+	Issues                       []epub.CompatibilityIssue
+	CheckedAt                    time.Time
 }
 
 type KindleBook struct {

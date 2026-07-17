@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"sync"
 	"time"
@@ -75,7 +76,43 @@ func (s *Service) GetBookDetail(ctx context.Context, id string) (BookDetail, boo
 	for _, file := range files {
 		projection = append(projection, fileFromStore(file))
 	}
-	return BookDetail{Book: book, Files: projection}, true, nil
+	detail := BookDetail{Book: book, Files: projection}
+	if book.SourceFormat == "epub" {
+		record, found, err := s.store.Compatibility(ctx, book.Original.ID)
+		if err != nil {
+			return BookDetail{}, false, err
+		}
+		if found {
+			report := CompatibilityReport{FileID: record.FileID, SourceSHA256: record.SourceSHA256, Status: record.Status, CheckedAt: record.CheckedAt}
+			var metadata struct {
+				Metadata json.RawMessage `json:"metadata"`
+				Cover    json.RawMessage `json:"cover"`
+			}
+			if err := json.Unmarshal([]byte(record.MetadataJSON), &metadata); err != nil {
+				return BookDetail{}, false, err
+			}
+			if err := json.Unmarshal(metadata.Metadata, &report.Metadata); err != nil {
+				return BookDetail{}, false, err
+			}
+			if err := json.Unmarshal(metadata.Cover, &report.Cover); err != nil {
+				return BookDetail{}, false, err
+			}
+			if err := json.Unmarshal([]byte(record.SpineJSON), &report.Spine); err != nil {
+				return BookDetail{}, false, err
+			}
+			if err := json.Unmarshal([]byte(record.TOCJSON), &report.TOC); err != nil {
+				return BookDetail{}, false, err
+			}
+			if err := json.Unmarshal([]byte(record.ResourcesJSON), &report.Resources); err != nil {
+				return BookDetail{}, false, err
+			}
+			if err := json.Unmarshal([]byte(record.IssuesJSON), &report.Issues); err != nil {
+				return BookDetail{}, false, err
+			}
+			detail.Compatibility = &report
+		}
+	}
+	return detail, true, nil
 }
 
 func (s *Service) DownloadFile(ctx context.Context, id string) (string, File, error) {

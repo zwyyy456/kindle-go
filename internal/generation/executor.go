@@ -10,6 +10,7 @@ import (
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/converter"
+	"github.com/flashdict/kindle2flashdict/internal/epub"
 	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
@@ -37,6 +38,12 @@ func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.P
 		return err
 	}
 	defer e.library.RemoveTaskWork(value.ID)
+	if params.InputFormat == "epub" {
+		analysis := epub.Analyze(inputPath, epub.Options{DefaultLanguage: params.DefaultLanguage})
+		if !analysis.Compatible() {
+			return &task.ExecutionError{Code: "epub_incompatible", Message: analysis.Issues[0].Message}
+		}
+	}
 	if err := progress.Report(ctx, "parse", 1, 4); err != nil {
 		return err
 	}
