@@ -319,7 +319,7 @@ PRAGMA busy_timeout = 5000;
 | `schema_migrations` | `version`, `applied_at` | 数据库版本与幂等迁移 |
 | `runtime_lock` | `instance_id`, `pid`, `heartbeat_at` | 阻止同一书库被两个 `serve` worker 同时执行 |
 | `settings` | `key`, `value_json`, `updated_at` | Web 全局设置覆盖值 |
-| `books` | `id`, `display_name`, `source_format`, `state`, `imported_at` | 书籍聚合根；`state` 为 `active/deleting` |
+| `books` | `id`, `display_name`, `source_format`, `state`, `imported_at`, `legacy_last_error` | 书籍聚合根；`state` 为 `active/deleting`；`legacy_last_error` 仅用于旧同步界面迁移期间兼容，异步任务界面接管后删除 |
 | `files` | `id`, `book_id`, `role`, `state`, `format`, `display_name`, `rel_path`, `sha256`, `size_bytes`, `source_file_id`, `task_id`, `proofread_run_id`, `parameters_json`, `has_unresolved`, `created_at` | 原文件、修订文件、产物、报告和审计文件 |
 | `tasks` | `id`, `book_id`, `type`, `status`, `queue_seq`, `input_file_id`, `retry_of_task_id`, `parameters_json`, `stage`, `progress_current`, `progress_total`, `error_code`, `error_message`, `created_at`, `started_at`, `finished_at` | 单一持久化任务队列与进度 |
 | `task_events` | `task_id`, `seq`, `level`, `stage`, `message`, `created_at` | 面向用户和诊断的阶段事件，不保存整段正文 |
@@ -331,7 +331,7 @@ PRAGMA busy_timeout = 5000;
 
 ### 6.3 约束与索引
 
-- `books.source_format` 只能为 `txt` 或 `epub`。
+- 新导入服务只创建 `txt` 或 `epub` 书籍；数据库允许保留旧书库中已有的其他 Kindle 可下载格式，避免迁移时丢弃历史记录。
 - `files.role` 只能为 `original`、`revision`、`artifact`、`report`、`audit`。
 - `files.state` 只能为 `pending`、`ready`、`deleting`。
 - 每本书只能有一个 `role = original` 的文件，使用 partial unique index 保证。
@@ -361,7 +361,7 @@ PRAGMA busy_timeout = 5000;
 2. 验证原文件存在，重新计算大小、格式和 SHA-256。
 3. 每条旧记录创建一本书和一个 `original` 文件记录，继续引用旧文件路径，不移动字节。
 4. 旧 `Output` 如果存在，创建一个 `artifact` 文件记录，参数标记为 `{"legacy_import":true}`。
-5. 旧 `LastError` 写入一本迁移说明事件，不伪造任务。
+5. 旧 `LastError` 先写入过渡兼容字段，待异步任务界面接管旧同步界面时转换为迁移说明事件并删除该字段；迁移过程不伪造任务。
 6. 全部记录在单个 SQLite 事务中提交；任一记录失败则整个迁移回滚。
 7. 成功后写入 migration marker，但保留原 `index.json`、`originals/` 和 `converted/`，不删除或覆盖。
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -52,18 +53,7 @@ func TestLibraryResolveRejectsUnsafeIndexPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	library.index.Records = []Record{{
-		ID:           "record",
-		OriginalName: "bad.txt",
-		UploadedAt:   time.Now(),
-		Original: FileEntry{
-			Name:    "bad.txt",
-			RelPath: "../bad.txt",
-			Format:  "txt",
-		},
-	}}
-
-	if _, _, err := library.ResolveFile("record", "original"); err == nil {
+	if _, err := library.resolveRel("../bad.txt"); err == nil {
 		t.Fatal("expected unsafe path error")
 	}
 }
@@ -73,19 +63,23 @@ func TestLibraryResolveOutputUsesCurrentOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	library.index.Records = []Record{{
-		ID:           "record",
-		OriginalName: "book.txt",
-		UploadedAt:   time.Now(),
-		Output: FileEntry{
-			Name:      "book-new.azw3",
-			RelPath:   "converted/book-new.azw3",
-			Format:    "azw3",
-			CreatedAt: time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC),
-		},
-	}}
+	record, err := library.AddUpload("book.txt", strings.NewReader("book"), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	path, relPath, err := library.ConvertedPath(record.ID, "book-new.azw3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := library.AddConverted(record.ID, "book-new.azw3", relPath, int64(len("output")), created); err != nil {
+		t.Fatal(err)
+	}
 
-	_, file, err := library.ResolveFile("record", "output")
+	_, file, err := library.ResolveFile(record.ID, "output")
 	if err != nil {
 		t.Fatal(err)
 	}

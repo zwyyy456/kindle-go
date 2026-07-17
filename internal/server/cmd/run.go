@@ -56,6 +56,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer library.Close()
 	handler := server.Handler{
 		Library:    library,
 		BaseConfig: baseCfg,

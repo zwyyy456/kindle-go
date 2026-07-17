@@ -1,9 +1,7 @@
 package server
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,220 +9,103 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
-)
 
-const (
-	originalsDir = "originals"
-	convertedDir = "converted"
-	indexFile    = "index.json"
+	appstore "github.com/flashdict/kindle2flashdict/internal/store"
 )
 
 type Library struct {
 	root  string
-	mu    sync.Mutex
-	index Index
-}
-
-type Index struct {
-	Records []Record `json:"records"`
+	store *appstore.Store
 }
 
 type Record struct {
-	ID           string    `json:"id"`
-	OriginalName string    `json:"original_name"`
-	UploadedAt   time.Time `json:"uploaded_at"`
-	Original     FileEntry `json:"original"`
-	Output       FileEntry `json:"output,omitempty"`
-	LastError    string    `json:"last_error,omitempty"`
+	ID           string
+	OriginalName string
+	UploadedAt   time.Time
+	Original     FileEntry
+	Output       FileEntry
+	LastError    string
 }
 
 type FileEntry struct {
-	Name      string    `json:"name"`
-	RelPath   string    `json:"rel_path"`
-	Format    string    `json:"format"`
-	Size      int64     `json:"size"`
-	CreatedAt time.Time `json:"created_at"`
+	Name      string
+	RelPath   string
+	Format    string
+	Size      int64
+	CreatedAt time.Time
 }
 
 func NewLibrary(root string) (*Library, error) {
-	if root == "" {
-		root = "kindle-go-library"
-	}
-	root = filepath.Clean(root)
-	for _, dir := range []string{root, filepath.Join(root, originalsDir), filepath.Join(root, convertedDir)} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
-		}
-	}
-	l := &Library{root: root}
-	if err := l.load(); err != nil {
+	store, err := appstore.Open(root)
+	if err != nil {
 		return nil, err
 	}
-	return l, nil
+	return &Library{root: store.Root(), store: store}, nil
 }
 
-func (l *Library) Root() string {
-	return l.root
-}
+func (l *Library) Close() error { return l.store.Close() }
 
-func (l *Library) AddUpload(name string, r io.Reader, now time.Time) (Record, error) {
+func (l *Library) Root() string { return l.root }
+
+func (l *Library) AddUpload(name string, reader io.Reader, now time.Time) (Record, error) {
 	if strings.TrimSpace(name) == "" {
 		name = "upload"
 	}
-	if now.IsZero() {
-		now = time.Now()
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	recordID, err := randomID()
-	if err != nil {
-		return Record{}, err
-	}
-
 	cleanName := safeFileName(filepath.Base(name))
-	relPath := filepath.Join(originalsDir, recordID+"-"+cleanName)
-	absPath, err := l.resolveRel(relPath)
+	format := formatOf(cleanName)
+	if format != "txt" && format != "epub" {
+		return Record{}, fmt.Errorf("unsupported upload format %q", format)
+	}
+	book, err := l.store.CreateOriginal(context.Background(), name, cleanName, format, reader, now)
 	if err != nil {
 		return Record{}, err
 	}
-	out, err := os.OpenFile(absPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return Record{}, err
-	}
-	size, copyErr := io.Copy(out, r)
-	closeErr := out.Close()
-	if copyErr != nil {
-		_ = os.Remove(absPath)
-		return Record{}, copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(absPath)
-		return Record{}, closeErr
-	}
-
-	record := Record{
-		ID:           recordID,
-		OriginalName: name,
-		UploadedAt:   now,
-		Original: FileEntry{
-			Name:      cleanName,
-			RelPath:   filepath.ToSlash(relPath),
-			Format:    formatOf(cleanName),
-			Size:      size,
-			CreatedAt: now,
-		},
-	}
-	l.index.Records = append(l.index.Records, record)
-	if err := l.saveLocked(); err != nil {
-		l.index.Records = l.index.Records[:len(l.index.Records)-1]
-		_ = os.Remove(absPath)
-		return Record{}, err
-	}
-	return record, nil
+	return recordFromStore(book), nil
 }
 
 func (l *Library) AddConverted(recordID, name, relPath string, size int64, now time.Time) error {
-	if now.IsZero() {
-		now = time.Now()
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	record, ok := l.recordByIDLocked(recordID)
-	if !ok {
-		return fmt.Errorf("record %q not found", recordID)
-	}
-	previousOutput := record.Output
-	previousError := record.LastError
-	record.Output = FileEntry{
-		Name:      safeFileName(name),
-		RelPath:   filepath.ToSlash(relPath),
-		Format:    formatOf(name),
-		Size:      size,
-		CreatedAt: now,
-	}
-	record.LastError = ""
-	if err := l.saveLocked(); err != nil {
-		record.Output = previousOutput
-		record.LastError = previousError
-		return err
-	}
-	return nil
+	return l.store.AddArtifact(context.Background(), recordID, safeFileName(name), formatOf(name), relPath, size, now)
 }
 
-func (l *Library) SetError(recordID string, err error) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	record, ok := l.recordByIDLocked(recordID)
-	if !ok {
-		return fmt.Errorf("record %q not found", recordID)
+func (l *Library) SetError(recordID string, value error) error {
+	message := ""
+	if value != nil {
+		message = value.Error()
 	}
-	previous := record.LastError
-	if err == nil {
-		record.LastError = ""
-	} else {
-		record.LastError = err.Error()
-	}
-	if saveErr := l.saveLocked(); saveErr != nil {
-		record.LastError = previous
-		return saveErr
-	}
-	return nil
+	return l.store.SetLegacyError(context.Background(), recordID, message)
 }
 
 func (l *Library) Record(id string) (Record, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	record, ok := l.recordByIDLocked(id)
-	if !ok {
+	book, ok, err := l.store.Book(context.Background(), id)
+	if err != nil || !ok {
 		return Record{}, false
 	}
-	return *record, true
+	return recordFromStore(book), true
 }
 
 func (l *Library) Recent(now time.Time, window time.Duration) []Record {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	cutoff := now.Add(-window)
-	var records []Record
-	for _, record := range l.index.Records {
-		if !record.UploadedAt.Before(cutoff) {
-			records = append(records, record)
-		}
+	books, err := l.store.RecentBooks(context.Background(), now.Add(-window))
+	if err != nil {
+		return nil
 	}
-	sortRecords(records)
-	return records
+	return recordsFromStore(books)
 }
 
 func (l *Library) All() []Record {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	records := make([]Record, 0, len(l.index.Records))
-	for _, record := range l.index.Records {
-		records = append(records, record)
+	books, err := l.store.AllBooks(context.Background())
+	if err != nil {
+		return nil
 	}
-	sortRecords(records)
-	return records
+	return recordsFromStore(books)
 }
 
 func (l *Library) ResolveFile(recordID, kind string) (string, FileEntry, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	record, ok := l.recordByIDLocked(recordID)
+	record, ok := l.Record(recordID)
 	if !ok {
 		return "", FileEntry{}, os.ErrNotExist
 	}
@@ -253,87 +134,50 @@ func (l *Library) OriginalPath(record Record) (string, FileEntry, error) {
 }
 
 func (l *Library) ConvertedPath(recordID, outputName string) (string, string, error) {
+	fileID, err := appstore.NewID()
+	if err != nil {
+		return "", "", err
+	}
 	cleanName := safeFileName(outputName)
-	relPath := filepath.Join(convertedDir, recordID+"-"+cleanName)
+	relPath := filepath.Join("artifacts", recordID, fileID+filepath.Ext(cleanName))
 	absPath, err := l.resolveRel(relPath)
 	if err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 		return "", "", err
 	}
 	return absPath, filepath.ToSlash(relPath), nil
 }
 
-func (l *Library) load() error {
-	path := filepath.Join(l.root, indexFile)
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		l.index = Index{}
-		return nil
+func (l *Library) resolveRel(relPath string) (string, error) { return l.store.ResolveRel(relPath) }
+
+func recordsFromStore(books []appstore.Book) []Record {
+	records := make([]Record, 0, len(books))
+	for _, book := range books {
+		records = append(records, recordFromStore(book))
 	}
-	if err != nil {
-		return err
-	}
-	if len(strings.TrimSpace(string(data))) == 0 {
-		l.index = Index{}
-		return nil
-	}
-	return json.Unmarshal(data, &l.index)
+	sortRecords(records)
+	return records
 }
 
-func (l *Library) saveLocked() error {
-	data, err := json.MarshalIndent(l.index, "", "  ")
-	if err != nil {
-		return err
+func recordFromStore(book appstore.Book) Record {
+	return Record{
+		ID:           book.ID,
+		OriginalName: book.DisplayName,
+		UploadedAt:   book.ImportedAt,
+		Original:     fileFromStore(book.Original),
+		Output:       fileFromStore(book.LatestArtifact),
+		LastError:    book.LegacyLastError,
 	}
-	tmp := filepath.Join(l.root, indexFile+".tmp")
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(l.root, indexFile))
 }
 
-func (l *Library) resolveRel(relPath string) (string, error) {
-	if filepath.IsAbs(relPath) {
-		return "", fmt.Errorf("absolute library path is not allowed: %s", relPath)
-	}
-	cleanRel := filepath.Clean(filepath.FromSlash(relPath))
-	if cleanRel == "." || strings.HasPrefix(cleanRel, ".."+string(filepath.Separator)) || cleanRel == ".." {
-		return "", fmt.Errorf("unsafe library path: %s", relPath)
-	}
-	rootAbs, err := filepath.Abs(l.root)
-	if err != nil {
-		return "", err
-	}
-	absPath, err := filepath.Abs(filepath.Join(l.root, cleanRel))
-	if err != nil {
-		return "", err
-	}
-	if absPath != rootAbs && !strings.HasPrefix(absPath, rootAbs+string(filepath.Separator)) {
-		return "", fmt.Errorf("library path escapes root: %s", relPath)
-	}
-	return absPath, nil
-}
-
-func (l *Library) recordByIDLocked(id string) (*Record, bool) {
-	for i := range l.index.Records {
-		if l.index.Records[i].ID == id {
-			return &l.index.Records[i], true
-		}
-	}
-	return nil, false
+func fileFromStore(file appstore.File) FileEntry {
+	return FileEntry{Name: file.DisplayName, RelPath: file.RelPath, Format: file.Format, Size: file.Size, CreatedAt: file.CreatedAt}
 }
 
 func sortRecords(records []Record) {
-	sort.SliceStable(records, func(i, j int) bool {
-		return records[i].UploadedAt.After(records[j].UploadedAt)
-	})
-}
-
-func randomID() (string, error) {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b[:]), nil
+	sort.SliceStable(records, func(i, j int) bool { return records[i].UploadedAt.After(records[j].UploadedAt) })
 }
 
 func safeFileName(name string) string {
