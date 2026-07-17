@@ -52,14 +52,46 @@ func TestImportRejectsUnsupportedAndMismatchedContent(t *testing.T) {
 	assertIncomingCount(t, root, 0)
 }
 
-func TestImportChecksEPUBDeclaredExpandedSize(t *testing.T) {
+func TestImportEnforcesExactEPUBLimitWithoutResidue(t *testing.T) {
 	service, root := newTestService(t)
-	service.maxEPUBExpandedBytes = 16
 	data := epubArchive(t, map[string]string{
 		"META-INF/container.xml": "container",
-		"book.xhtml":             strings.Repeat("x", 17),
+		"book.xhtml":             "content",
 	})
-	_, err := service.Import(context.Background(), ImportRequest{Filename: "book.epub", Reader: bytes.NewReader(data)})
+	service.maxEPUBBytes = int64(len(data))
+	result, err := service.Import(context.Background(), ImportRequest{Filename: "boundary.epub", Reader: bytes.NewReader(data)})
+	if err != nil || result.Book.ID == "" {
+		t.Fatalf("boundary import = %#v, %v", result, err)
+	}
+	service.maxEPUBBytes = int64(len(data) - 1)
+	_, err = service.Import(context.Background(), ImportRequest{Filename: "large.epub", Reader: bytes.NewReader(data)})
+	if ErrorCode(err) != "upload_too_large" {
+		t.Fatalf("oversize error = %v", err)
+	}
+	books, err := service.AllBooks(context.Background())
+	if err != nil || len(books) != 1 {
+		t.Fatalf("books after rejected import = %d, %v", len(books), err)
+	}
+	assertIncomingCount(t, root, 0)
+}
+
+func TestImportChecksEPUBDeclaredExpandedSize(t *testing.T) {
+	service, root := newTestService(t)
+	containerXML := `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="missing.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`
+	service.maxEPUBExpandedBytes = int64(len(containerXML) + 16)
+	boundary := epubArchive(t, map[string]string{
+		"META-INF/container.xml": containerXML,
+		"a":                      strings.Repeat("x", 16),
+	})
+	result, err := service.Import(context.Background(), ImportRequest{Filename: "boundary.epub", Reader: bytes.NewReader(boundary)})
+	if err != nil || result.Book.ID == "" {
+		t.Fatalf("expanded boundary import = %#v, %v", result, err)
+	}
+	data := epubArchive(t, map[string]string{
+		"META-INF/container.xml": containerXML,
+		"a":                      strings.Repeat("x", 17),
+	})
+	_, err = service.Import(context.Background(), ImportRequest{Filename: "book.epub", Reader: bytes.NewReader(data)})
 	if ErrorCode(err) != "epub_expanded_too_large" {
 		t.Fatalf("expanded size error = %v", err)
 	}

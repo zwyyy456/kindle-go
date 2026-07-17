@@ -350,19 +350,20 @@ func parseTime(value string) (time.Time, error) {
 	return parsed, nil
 }
 
+type pendingFileRecord struct {
+	id, bookID, role, relPath, sha256, taskID string
+	size                                      int64
+}
+
 func (s *Store) reconcilePendingFiles(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, book_id, role, rel_path, sha256, size_bytes FROM files WHERE state = 'pending'`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, book_id, role, rel_path, sha256, size_bytes, COALESCE(task_id, '') FROM files WHERE state = 'pending' ORDER BY task_id, id`)
 	if err != nil {
 		return err
 	}
-	type pendingFile struct {
-		id, bookID, role, relPath, sha256 string
-		size                              int64
-	}
-	var pending []pendingFile
+	var pending []pendingFileRecord
 	for rows.Next() {
-		var file pendingFile
-		if err := rows.Scan(&file.id, &file.bookID, &file.role, &file.relPath, &file.sha256, &file.size); err != nil {
+		var file pendingFileRecord
+		if err := rows.Scan(&file.id, &file.bookID, &file.role, &file.relPath, &file.sha256, &file.size, &file.taskID); err != nil {
 			rows.Close()
 			return err
 		}
@@ -371,31 +372,124 @@ func (s *Store) reconcilePendingFiles(ctx context.Context) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
+	groups := make(map[string][]pendingFileRecord)
 	for _, file := range pending {
 		path, err := s.ResolveRel(file.relPath)
-		if file.role == "original" && err == nil {
+		if file.role == "original" {
 			var digest string
 			var size int64
-			digest, size, err = hashFile(path)
+			if err == nil {
+				digest, size, err = hashFile(path)
+			}
 			if err == nil && digest == file.sha256 && size == file.size {
 				if _, err := s.db.ExecContext(ctx, `UPDATE files SET state = 'ready' WHERE id = ? AND state = 'pending'`, file.id); err != nil {
 					return err
 				}
 				continue
 			}
-		}
-		if path != "" {
-			_ = os.Remove(path)
-		}
-		if file.role == "original" {
+			if path != "" {
+				_ = os.Remove(path)
+			}
 			if _, err := s.db.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, file.bookID); err != nil {
 				return err
 			}
-		} else if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, file.id); err != nil {
-			return err
+			continue
+		}
+		groups[file.taskID] = append(groups[file.taskID], file)
+	}
+	for taskID, files := range groups {
+		if taskID != "" && pendingGroupIsComplete(s, files) {
+			finalized, err := s.finalizePendingTaskFiles(ctx, taskID)
+			if err != nil {
+				return err
+			}
+			if finalized {
+				continue
+			}
+		}
+		for _, file := range files {
+			path, err := s.ResolveRel(file.relPath)
+			if err == nil {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				removeEmptyParents(filepath.Dir(path), s.root)
+			}
+		}
+		if taskID != "" {
+			if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE task_id = ? AND state = 'pending'`, taskID); err != nil {
+				return err
+			}
+		} else {
+			for _, file := range files {
+				if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE id = ? AND state = 'pending'`, file.id); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
+}
+
+func pendingGroupIsComplete(s *Store, files []pendingFileRecord) bool {
+	for _, file := range files {
+		path, err := s.ResolveRel(file.relPath)
+		if err != nil {
+			return false
+		}
+		digest, size, err := hashFile(path)
+		if err != nil || digest != file.sha256 || size != file.size {
+			return false
+		}
+	}
+	return len(files) != 0
+}
+
+func (s *Store) finalizePendingTaskFiles(ctx context.Context, taskID string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id = ?`, taskID).Scan(&status); err != nil {
+		return false, err
+	}
+	if status != "running" && status != "completed" {
+		return false, nil
+	}
+	if status == "running" {
+		now := time.Now()
+		result, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'completed', error_code = '', error_message = '', finished_at = ?, stage = 'completed' WHERE id = ? AND status = 'running'`, formatTime(now), taskID)
+		if err != nil {
+			return false, err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if rows != 1 {
+			return false, fmt.Errorf("task %q changed during startup recovery", taskID)
+		}
+		if err := appendTaskEvent(ctx, tx, taskID, "info", "completed", "Task completed during startup recovery", now); err != nil {
+			return false, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE files SET state = 'ready' WHERE task_id = ? AND state = 'pending'`, taskID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rows == 0 {
+		return false, fmt.Errorf("task %q has no pending files to recover", taskID)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) cleanupIncoming() error {

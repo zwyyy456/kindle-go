@@ -200,7 +200,7 @@ func TestOpenReconcilesPendingFiles(t *testing.T) {
 	}
 }
 
-func TestOpenRemovesPendingArtifactFromInterruptedCommit(t *testing.T) {
+func TestOpenCompletesArtifactCommitInterruptedAfterRename(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)
 	if err != nil {
@@ -213,6 +213,9 @@ func TestOpenRemovesPendingArtifactFromInterruptedCommit(t *testing.T) {
 	task, err := store.CreateTask(context.Background(), CreateTaskParams{BookID: book.ID, Type: "generate_epub", InputFileID: book.Original.ID})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if claimed, ok, err := store.ClaimNextTask(context.Background(), []string{"generate_epub"}, time.Now()); err != nil || !ok || claimed.ID != task.ID {
+		t.Fatalf("claim = %#v, %v, %v", claimed, ok, err)
 	}
 	path := filepath.Join(root, "artifacts", book.ID, "pending.epub")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -237,12 +240,141 @@ func TestOpenRemovesPendingArtifactFromInterruptedCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("pending artifact remains after restart: %v", err)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("completed artifact missing after restart: %v", err)
 	}
-	var count int
-	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM files WHERE id = 'pending-artifact'`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("pending artifact row count = %d, %v", count, err)
+	file, ok, err := reopened.File(context.Background(), "pending-artifact")
+	if err != nil || !ok || file.State != "ready" {
+		t.Fatalf("recovered artifact = %#v, %v, %v", file, ok, err)
+	}
+	recoveredTask, ok, err := reopened.Task(context.Background(), task.ID)
+	if err != nil || !ok || recoveredTask.Status != "completed" {
+		t.Fatalf("recovered task = %#v, %v, %v", recoveredTask, ok, err)
+	}
+	events, err := reopened.TaskEvents(context.Background(), task.ID)
+	if err != nil || len(events) < 3 || !strings.Contains(events[len(events)-1].Message, "startup recovery") {
+		t.Fatalf("recovery events = %#v, %v", events, err)
+	}
+}
+
+func TestStartupRollsBackArtifactCommitInterruptedBeforeRename(t *testing.T) {
+	root := t.TempDir()
+	storage, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := storage.CreateOriginal(context.Background(), "book.txt", "book.txt", "txt", strings.NewReader("source"), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRecord, err := storage.CreateTask(context.Background(), CreateTaskParams{BookID: book.ID, Type: "generate_epub", InputFileID: book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{"generate_epub"}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	workPath := filepath.Join(root, "work", taskRecord.ID, "output.epub.part")
+	if err := os.MkdirAll(filepath.Dir(workPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("complete bytes before rename")
+	if err := os.WriteFile(workPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest, _, err := hashFile(workPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalRel := filepath.ToSlash(filepath.Join("artifacts", book.ID, "never-renamed.epub"))
+	if _, err := storage.db.Exec(`INSERT INTO files(id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, source_file_id, task_id, created_at) VALUES('before-rename', ?, 'artifact', 'pending', 'epub', 'book.epub', ?, ?, ?, ?, ?, ?)`, book.ID, finalRel, digest, len(data), book.Original.ID, taskRecord.ID, formatTime(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenForWorker(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.RecoverRunningTasks(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := reopened.File(context.Background(), "before-rename"); err != nil || ok {
+		t.Fatalf("rolled-back file visible = %v, %v", ok, err)
+	}
+	recoveredTask, ok, err := reopened.Task(context.Background(), taskRecord.ID)
+	if err != nil || !ok || recoveredTask.Status != "failed" || recoveredTask.ErrorCode != "task_process_interrupted" {
+		t.Fatalf("recovered task = %#v, %v, %v", recoveredTask, ok, err)
+	}
+	if _, err := os.Stat(workPath); !os.IsNotExist(err) {
+		t.Fatalf("interrupted work remains: %v", err)
+	}
+}
+
+func TestOpenAtomicallyCompletesRenamedRevisionDeliverableGroup(t *testing.T) {
+	root := t.TempDir()
+	storage, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := storage.CreateOriginal(context.Background(), "book.txt", "book.txt", "txt", strings.NewReader("source"), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRecord, err := storage.CreateTask(context.Background(), CreateTaskParams{BookID: book.ID, Type: "build_revision_txt", InputFileID: book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{"build_revision_txt"}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	finalDirRel := filepath.ToSlash(filepath.Join("revisions", book.ID, "revision-file"))
+	finalDir, err := storage.ResolveRel(finalDirRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(finalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	values := []struct{ id, role, format, name, data string }{
+		{id: "revision-file", role: "revision", format: "txt", name: "revision.txt", data: "revised"},
+		{id: "report-file", role: "report", format: "md", name: "report.md", data: "report"},
+		{id: "audit-file", role: "audit", format: "jsonl", name: "audit.jsonl", data: "{}\n"},
+	}
+	for _, value := range values {
+		path := filepath.Join(finalDir, value.name)
+		if err := os.WriteFile(path, []byte(value.data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		digest, size, err := hashFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		relPath := filepath.ToSlash(filepath.Join(finalDirRel, value.name))
+		if _, err := storage.db.Exec(`INSERT INTO files(id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, source_file_id, task_id, created_at) VALUES(?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`, value.id, book.ID, value.role, value.format, value.name, relPath, digest, size, book.Original.ID, taskRecord.ID, formatTime(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	files, err := reopened.FilesForBook(context.Background(), book.ID)
+	if err != nil || len(files) != 4 {
+		t.Fatalf("recovered revision files = %#v, %v", files, err)
+	}
+	recoveredTask, ok, err := reopened.Task(context.Background(), taskRecord.ID)
+	if err != nil || !ok || recoveredTask.Status != "completed" {
+		t.Fatalf("recovered revision task = %#v, %v, %v", recoveredTask, ok, err)
 	}
 }
 
