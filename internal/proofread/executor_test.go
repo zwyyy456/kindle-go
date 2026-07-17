@@ -84,7 +84,7 @@ func TestProofreadExecutorCompletesTXTAndPersistsVerifiedCandidates(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(libraryService, taskService, settingsService)
+	service := NewService(storage, libraryService, taskService, settingsService)
 	created, err := service.Create(context.Background(), imported.Book.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestProofreadExecutorCompletesMinimalEPUB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := NewService(libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
+	created, err := NewService(storage, libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestProofreadFailureDoesNotExposeRunOrCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := NewService(libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
+	created, err := NewService(storage, libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestCancelProofreadStopsModelAndDoesNotExposeRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := NewService(libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
+	created, err := NewService(storage, libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestProofreadBatchesUseConfiguredInternalConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := NewService(libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
+	created, err := NewService(storage, libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

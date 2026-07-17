@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +21,11 @@ type ProofreadCandidateRecord struct {
 	ID, RunID, Kind, LocationJSON, ExpectedOriginal, Category, FirstConfidence, FirstReplacement string
 	Verification, VerifiedReplacement, Reason                                                    string
 	CreatedAt                                                                                    time.Time
+}
+
+type CandidateDecisionRecord struct {
+	ID, CandidateID, Decision, Replacement string
+	CreatedAt                              time.Time
 }
 
 func (s *Store) CommitProofreadRun(ctx context.Context, run ProofreadRunRecord, candidates []ProofreadCandidateRecord, workStateRel string, now time.Time) error {
@@ -97,13 +104,22 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.ID, run.ID, candidate.Kin
 }
 
 func (s *Store) ProofreadRuns(ctx context.Context, bookID string) ([]ProofreadRunRecord, error) {
-	query := `SELECT id, book_id, source_file_id, task_id, source_sha256, format, model, batch_size, concurrency, status, engine_version, engine_state_rel_path, created_at, COALESCE(completed_at, '') FROM proofread_runs`
-	var args []any
 	if strings.TrimSpace(bookID) != "" {
-		query += ` WHERE book_id = ?`
-		args = append(args, bookID)
+		return s.proofreadRuns(ctx, ` WHERE book_id = ?`, bookID)
 	}
-	query += ` ORDER BY created_at DESC, id DESC`
+	return s.proofreadRuns(ctx, "")
+}
+
+func (s *Store) ProofreadRun(ctx context.Context, id string) (ProofreadRunRecord, bool, error) {
+	runs, err := s.proofreadRuns(ctx, ` WHERE id = ?`, id)
+	if err != nil || len(runs) == 0 {
+		return ProofreadRunRecord{}, false, err
+	}
+	return runs[0], true, nil
+}
+
+func (s *Store) proofreadRuns(ctx context.Context, where string, args ...any) ([]ProofreadRunRecord, error) {
+	query := `SELECT id, book_id, source_file_id, task_id, source_sha256, format, model, batch_size, concurrency, status, engine_version, engine_state_rel_path, created_at, COALESCE(completed_at, '') FROM proofread_runs` + where + ` ORDER BY created_at DESC, id DESC`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -151,4 +167,68 @@ func (s *Store) ProofreadCandidates(ctx context.Context, runID string) ([]Proofr
 		candidates = append(candidates, candidate)
 	}
 	return candidates, rows.Err()
+}
+
+func (s *Store) ProofreadCandidate(ctx context.Context, id string) (ProofreadCandidateRecord, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, run_id, kind, location_json, expected_original, category, first_confidence, first_replacement, verification, verified_replacement, reason, created_at FROM proofread_candidates WHERE id = ?`, id)
+	var candidate ProofreadCandidateRecord
+	var created string
+	if err := row.Scan(&candidate.ID, &candidate.RunID, &candidate.Kind, &candidate.LocationJSON, &candidate.ExpectedOriginal, &candidate.Category, &candidate.FirstConfidence, &candidate.FirstReplacement, &candidate.Verification, &candidate.VerifiedReplacement, &candidate.Reason, &created); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ProofreadCandidateRecord{}, false, nil
+		}
+		return ProofreadCandidateRecord{}, false, err
+	}
+	var err error
+	candidate.CreatedAt, err = parseTime(created)
+	return candidate, err == nil, err
+}
+
+func (s *Store) CandidateDecisions(ctx context.Context, runID string) ([]CandidateDecisionRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id, d.candidate_id, d.decision, d.replacement, d.created_at
+FROM candidate_decisions d JOIN proofread_candidates c ON c.id = d.candidate_id
+WHERE c.run_id = ? ORDER BY d.created_at, d.id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var decisions []CandidateDecisionRecord
+	for rows.Next() {
+		var decision CandidateDecisionRecord
+		var created string
+		if err := rows.Scan(&decision.ID, &decision.CandidateID, &decision.Decision, &decision.Replacement, &created); err != nil {
+			return nil, err
+		}
+		decision.CreatedAt, err = parseTime(created)
+		if err != nil {
+			return nil, err
+		}
+		decisions = append(decisions, decision)
+	}
+	return decisions, rows.Err()
+}
+
+func (s *Store) AppendCandidateDecision(ctx context.Context, candidateID, decision, replacement string, now time.Time) (CandidateDecisionRecord, error) {
+	if decision != "accept" && decision != "reject" && decision != "modify" {
+		return CandidateDecisionRecord{}, fmt.Errorf("unsupported candidate decision %q", decision)
+	}
+	id, err := NewID()
+	if err != nil {
+		return CandidateDecisionRecord{}, err
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO candidate_decisions(id, candidate_id, decision, replacement, created_at)
+VALUES(?, ?, ?, ?, ?)`, id, candidateID, decision, replacement, formatTime(now))
+	if err != nil {
+		return CandidateDecisionRecord{}, err
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		if err != nil {
+			return CandidateDecisionRecord{}, err
+		}
+		return CandidateDecisionRecord{}, fmt.Errorf("candidate decision was not inserted")
+	}
+	return CandidateDecisionRecord{ID: id, CandidateID: candidateID, Decision: decision, Replacement: replacement, CreatedAt: now}, nil
 }

@@ -10,8 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
@@ -23,7 +26,7 @@ import (
 )
 
 func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
-	handler, service, _ := newHTTPTestHandler(t)
+	handler, service, _, _ := newHTTPTestHandler(t)
 	request := multipartRequest(t, "/books/import", "book.txt", "正文")
 	response := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(response, request)
@@ -52,7 +55,7 @@ func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 }
 
 func TestWebDuplicateConfirmationIsOneTime(t *testing.T) {
-	handler, service, _ := newHTTPTestHandler(t)
+	handler, service, _, _ := newHTTPTestHandler(t)
 	for index := 0; index < 2; index++ {
 		response := httptest.NewRecorder()
 		handler.WebMux().ServeHTTP(response, multipartRequest(t, "/books/import", "book.txt", "same"))
@@ -93,7 +96,7 @@ func TestWebDuplicateConfirmationIsOneTime(t *testing.T) {
 }
 
 func TestWebImportMapsHardLimitToRequestEntityTooLarge(t *testing.T) {
-	handler, _, _ := newHTTPTestHandler(t)
+	handler, _, _, _ := newHTTPTestHandler(t)
 	response := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(response, multipartRequest(t, "/books/import", "book.txt", strings.Repeat("x", int(library.MaxTXTBytes+1))))
 	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), "upload_too_large") {
@@ -102,7 +105,7 @@ func TestWebImportMapsHardLimitToRequestEntityTooLarge(t *testing.T) {
 }
 
 func TestWebGenerateCreatesTaskAndLegacyConvertRouteIsGone(t *testing.T) {
-	handler, service, taskService := newHTTPTestHandler(t)
+	handler, service, taskService, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +149,7 @@ func TestWebGenerateCreatesTaskAndLegacyConvertRouteIsGone(t *testing.T) {
 }
 
 func TestWebStartsSingleActiveProofreadTaskWithSettingsSnapshot(t *testing.T) {
-	handler, service, taskService := newHTTPTestHandler(t)
+	handler, service, taskService, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})
 	if err != nil {
 		t.Fatal(err)
@@ -168,8 +171,70 @@ func TestWebStartsSingleActiveProofreadTaskWithSettingsSnapshot(t *testing.T) {
 	}
 }
 
+func TestWebReviewsCandidatesAndAppendsDecision(t *testing.T) {
+	handler, service, _, storage := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n错字\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := handler.Proofreads.Create(context.Background(), result.Book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{string(task.Proofread)}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim proofread = %v, %v", ok, err)
+	}
+	workRel := filepath.ToSlash(filepath.Join("work", created.ID, "proofread-state"))
+	workPath, err := storage.ResolveRel(workRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workPath, "candidates.jsonl"), []byte(`{"candidate_id":"candidate-web","context":"1 第一章\n2 错字"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-web"
+	location := `{"line":2,"start_char":4,"end_char":6}`
+	err = storage.CommitProofreadRun(context.Background(), store.ProofreadRunRecord{
+		ID: runID, BookID: result.Book.ID, SourceFileID: result.Book.Original.ID, TaskID: created.ID, SourceSHA256: result.Book.Original.SHA256,
+		Format: "txt", BatchSize: 12000, Concurrency: 3, EngineVersion: "test", CreatedAt: time.Now(),
+	}, []store.ProofreadCandidateRecord{{
+		ID: "candidate-web", Kind: "text", LocationJSON: location, ExpectedOriginal: "错字", Category: "wrong_character",
+		FirstConfidence: "review", FirstReplacement: "正字", Verification: "review", VerifiedReplacement: "正字", Reason: "上下文待确认",
+	}}, workRel, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/books/"+result.Book.ID, nil))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "/proofreads/"+runID) {
+		t.Fatalf("book detail = %d, %q", detail.Code, detail.Body.String())
+	}
+	reviewURL := "/books/" + result.Book.ID + "/proofreads/" + runID
+	review := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(review, httptest.NewRequest(http.MethodGet, reviewURL, nil))
+	if review.Code != http.StatusOK || !strings.Contains(review.Body.String(), "candidate-web") || !strings.Contains(review.Body.String(), "1 第一章") {
+		t.Fatalf("review = %d, %q", review.Code, review.Body.String())
+	}
+	form := url.Values{"decision": {"modify"}, "replacement": {"正字"}}
+	request := httptest.NewRequest(http.MethodPost, "/candidates/candidate-web/decision", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), reviewURL) {
+		t.Fatalf("decision = %d, %q", response.Code, response.Header().Get("Location"))
+	}
+	decisions, err := storage.CandidateDecisions(context.Background(), runID)
+	if err != nil || len(decisions) != 1 || decisions[0].Decision != "modify" || decisions[0].Replacement != "正字" {
+		t.Fatalf("decisions = %#v, %v", decisions, err)
+	}
+}
+
 func TestDownloadsUseFileIDAndKindleMuxRemainsReadOnly(t *testing.T) {
-	handler, service, _ := newHTTPTestHandler(t)
+	handler, service, _, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("download body")})
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +257,7 @@ func TestDownloadsUseFileIDAndKindleMuxRemainsReadOnly(t *testing.T) {
 }
 
 func TestBookDeletionRequiresConfirmationAndRemovesBook(t *testing.T) {
-	handler, service, _ := newHTTPTestHandler(t)
+	handler, service, _, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("source")})
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +281,7 @@ func TestBookDeletionRequiresConfirmationAndRemovesBook(t *testing.T) {
 }
 
 func TestTXTPreviewUsesSubmittedParameters(t *testing.T) {
-	handler, service, _ := newHTTPTestHandler(t)
+	handler, service, _, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章 开始\n\n正文。")})
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +297,7 @@ func TestTXTPreviewUsesSubmittedParameters(t *testing.T) {
 }
 
 func TestIncompatibleEPUBShowsStructuredReportAndBlocksGeneration(t *testing.T) {
-	handler, service, _ := newHTTPTestHandler(t)
+	handler, service, _, _ := newHTTPTestHandler(t)
 	data := epubArchiveForHTTP(t, map[string]string{
 		"META-INF/container.xml": `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="missing.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
 	})
@@ -256,7 +321,7 @@ func TestIncompatibleEPUBShowsStructuredReportAndBlocksGeneration(t *testing.T) 
 }
 
 func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
-	handler, service, _ := newHTTPTestHandler(t)
+	handler, service, _, _ := newHTTPTestHandler(t)
 	data := epubArchiveForHTTP(t, map[string]string{
 		"META-INF/container.xml": `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
 		"book.opf":               `<package xmlns="http://www.idpf.org/2007/opf"><metadata/><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>`,
@@ -303,7 +368,7 @@ func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
 }
 
 func TestBookFormDoesNotPersistPerBookConversionSettings(t *testing.T) {
-	handler, service, taskService := newHTTPTestHandler(t)
+	handler, service, taskService, _ := newHTTPTestHandler(t)
 	values, err := handler.Settings.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -358,7 +423,7 @@ func epubArchiveForHTTP(t *testing.T, files map[string]string) []byte {
 	return buffer.Bytes()
 }
 
-func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service) {
+func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service, *store.Store) {
 	t.Helper()
 	storage, err := store.Open(t.TempDir())
 	if err != nil {
@@ -372,13 +437,13 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service)
 		t.Fatal(err)
 	}
 	generationService := generation.NewService(service, taskService, txtconfig.Defaults(), settingsService)
-	proofreadService := proofread.NewService(service, taskService, settingsService)
+	proofreadService := proofread.NewService(storage, service, taskService, settingsService)
 	return Handler{
 		Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService, Proofreads: proofreadService,
 		Diagnostics: func(context.Context) proofread.DependencyDiagnostics {
 			return proofread.DependencyDiagnostics{PythonPath: "/python3", PythonVersion: "Python test", CodexPath: "/codex", CodexVersion: "codex test"}
 		},
-	}, service, taskService
+	}, service, taskService, storage
 }
 
 func multipartRequest(t *testing.T, target, name, content string) *http.Request {

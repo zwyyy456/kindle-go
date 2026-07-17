@@ -78,7 +78,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	taskService := task.NewService(storage)
 	generationService := generation.NewService(libraryService, taskService, baseCfg, settingsService)
 	generationExecutor := generation.NewExecutor(libraryService)
-	proofreadService := proofread.NewService(libraryService, taskService, settingsService)
+	proofreadService := proofread.NewService(storage, libraryService, taskService, settingsService)
 	proofreadExecutor := proofread.NewExecutor(storage, libraryService, nil, nil)
 	runner := task.NewRunner(taskService, map[task.Type]task.Executor{
 		task.GenerateEPUB: generationExecutor,

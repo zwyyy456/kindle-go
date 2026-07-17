@@ -37,6 +37,7 @@ func (h Handler) WebMux() http.Handler {
 	mux.HandleFunc("/", h.handleWebRoot)
 	mux.HandleFunc("/books", h.handleBooks)
 	mux.HandleFunc("/books/", h.handleBookRoute)
+	mux.HandleFunc("/candidates/", h.handleCandidateRoute)
 	mux.HandleFunc("/files/", h.handleFileRoute)
 	mux.HandleFunc("/tasks", h.handleTasks)
 	mux.HandleFunc("/tasks/", h.handleTaskRoute)
@@ -112,6 +113,11 @@ func (h Handler) handleBookRoute(w http.ResponseWriter, r *http.Request) {
 		h.handleImportConfirm(w, r, token)
 		return
 	}
+	parts := strings.Split(path, "/")
+	if r.Method == http.MethodGet && len(parts) == 3 && parts[0] != "" && parts[1] == "proofreads" && parts[2] != "" {
+		h.handleProofreadReview(w, r, parts[0], parts[2])
+		return
+	}
 	if r.Method == http.MethodGet && path != "" && !strings.Contains(path, "/") {
 		h.handleBookDetail(w, r, path)
 		return
@@ -145,6 +151,37 @@ func (h Handler) handleBookRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.NotFound(w, r)
+}
+
+func (h Handler) handleCandidateRoute(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/candidates/")
+	if r.Method != http.MethodPost || !strings.HasSuffix(path, "/decision") {
+		http.NotFound(w, r)
+		return
+	}
+	id := strings.TrimSuffix(path, "/decision")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if h.Proofreads == nil {
+		http.Error(w, "proofreading service is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	run, err := h.Proofreads.Decide(r.Context(), id, proofread.DecisionRequest{Decision: r.Form.Get("decision"), Replacement: r.Form.Get("replacement")})
+	if run.ID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	message := "candidate decision saved"
+	if err != nil {
+		message = "decision failed: " + err.Error()
+	}
+	http.Redirect(w, r, "/books/"+run.BookID+"/proofreads/"+run.ID+"?message="+urlMessage(message), http.StatusSeeOther)
 }
 
 func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
@@ -265,11 +302,22 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	var tasks []task.Task
+	var runs []storeProofreadRunView
 	if h.Tasks != nil {
 		tasks, err = h.Tasks.List(r.Context(), id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+	}
+	if h.Proofreads != nil {
+		values, err := h.Proofreads.Runs(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, value := range values {
+			runs = append(runs, storeProofreadRunView{ID: value.ID, Format: strings.ToUpper(value.Format), Model: value.Model, CompletedAt: value.CompletedAt.Format("2006-01-02 15:04")})
 		}
 	}
 	files := make([]fileView, 0, len(detail.Files))
@@ -283,7 +331,7 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 			InputFormat:  detail.Book.SourceFormat,
 			TitleDefault: strings.TrimSuffix(detail.Book.Original.DisplayName, filepath.Ext(detail.Book.Original.DisplayName)),
 		},
-		Files: files, Tasks: taskViews(tasks), Message: r.URL.Query().Get("message"), Compatibility: detail.Compatibility,
+		Files: files, Tasks: taskViews(tasks), ProofreadRuns: runs, Message: r.URL.Query().Get("message"), Compatibility: detail.Compatibility,
 		CanGenerate: detail.Book.SourceFormat == "txt" || (detail.Compatibility != nil && detail.Compatibility.Status == "passed"),
 	}
 	if h.Settings != nil {
@@ -295,6 +343,30 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 		data.Defaults = defaults
 	}
 	if err := bookTemplate.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request, bookID, runID string) {
+	if h.Proofreads == nil {
+		http.Error(w, "proofreading service is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	page, ok, err := h.Proofreads.Review(r.Context(), bookID, runID, proofread.ReviewQuery{Filter: r.URL.Query().Get("filter"), Page: parseInt(r.URL.Query().Get("page"))})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	data := proofreadPageData{
+		BookID: bookID, Run: storeProofreadRunView{ID: page.Run.ID, Format: strings.ToUpper(page.Run.Format), Model: page.Run.Model, CompletedAt: page.Run.CompletedAt.Format("2006-01-02 15:04")},
+		Candidates: page.Candidates, Filter: page.Filter, Page: page.Page, PreviousPage: page.Page - 1, NextPage: page.Page + 1,
+		HasPrevious: page.HasPrevious, HasNext: page.HasNext, Total: page.Total, Message: r.URL.Query().Get("message"),
+	}
+	if err := proofreadTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -712,10 +784,32 @@ type bookPageData struct {
 	Book          recordView
 	Files         []fileView
 	Tasks         []taskView
+	ProofreadRuns []storeProofreadRunView
 	Message       string
 	Compatibility *library.CompatibilityReport
 	CanGenerate   bool
 	Defaults      appsettings.Values
+}
+
+type storeProofreadRunView struct {
+	ID          string
+	Format      string
+	Model       string
+	CompletedAt string
+}
+
+type proofreadPageData struct {
+	BookID       string
+	Run          storeProofreadRunView
+	Candidates   []proofread.CandidateView
+	Filter       string
+	Page         int
+	PreviousPage int
+	NextPage     int
+	HasPrevious  bool
+	HasNext      bool
+	Total        int
+	Message      string
 }
 
 type settingsPageData struct {
@@ -922,6 +1016,11 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
 
   <form method="post" action="/books/{{.Book.ID}}/proofreads"><button type="submit">Start AI proofreading with Codex CLI</button></form>
 
+  {{if .ProofreadRuns}}<h2>Proofreading runs</h2>
+  <table><thead><tr><th>Completed</th><th>Format</th><th>Model</th><th>Candidates</th></tr></thead><tbody>
+  {{range .ProofreadRuns}}<tr><td>{{.CompletedAt}}</td><td>{{.Format}}</td><td>{{if .Model}}{{.Model}}{{else}}Codex default{{end}}</td><td><a href="/books/{{$.Book.ID}}/proofreads/{{.ID}}">Review candidates</a></td></tr>{{end}}
+  </tbody></table>{{end}}
+
   {{with .Compatibility}}
   <h2>EPUB compatibility: {{.Status}}</h2>
   <p>Title: {{.Metadata.Title}} · Author: {{.Metadata.Author}} · Language: {{.Metadata.Language}}</p>
@@ -970,6 +1069,42 @@ var tasksTemplate = template.Must(template.New("tasks").Parse(`<!doctype html>
 <table><thead><tr><th>Book</th><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th></tr></thead><tbody>
 {{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td>{{.Type}}</td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
 </tbody></table></body></html>`))
+
+var proofreadTemplate = template.Must(template.New("proofread").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Proofreading candidates — Kindle Go</title><style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.45; color: #1f2933; }
+.candidate { border: 1px solid #ccd3dc; border-radius: 6px; padding: 16px; margin: 18px 0; }
+.muted { color: #627282; } .error { color: #9b1c1c; } .automatic { color: #176b3a; }
+pre { white-space: pre-wrap; background: #f4f6f8; padding: 12px; overflow-wrap: anywhere; }
+form.inline { display: inline; } input[type=text] { min-width: 280px; padding: 5px; }
+</style></head><body>
+<p><a href="/books/{{.BookID}}">← Back to book</a> · <a href="/tasks">All tasks</a></p>
+<h1>Proofreading candidates</h1>
+<p class="muted">Run {{.Run.ID}} · {{.Run.Format}} · completed {{.Run.CompletedAt}} · model: {{if .Run.Model}}{{.Run.Model}}{{else}}Codex default{{end}}</p>
+{{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
+<form method="get"><label>Filter <select name="filter">
+<option value="">All</option><option value="pending" {{if eq .Filter "pending"}}selected{{end}}>Pending</option>
+<option value="automatic" {{if eq .Filter "automatic"}}selected{{end}}>Automatic</option>
+<option value="accepted" {{if eq .Filter "accepted"}}selected{{end}}>Accepted</option>
+<option value="modified" {{if eq .Filter "modified"}}selected{{end}}>Modified</option>
+<option value="rejected" {{if eq .Filter "rejected"}}selected{{end}}>Rejected</option>
+<option value="conflict" {{if eq .Filter "conflict"}}selected{{end}}>Conflicts</option>
+</select></label><button type="submit">Apply</button></form>
+<p class="muted">{{.Total}} candidate(s), page {{.Page}}</p>
+{{range .Candidates}}<section class="candidate" id="{{.Candidate.ID}}">
+<h2>{{.Candidate.ExpectedOriginal}} → {{.Candidate.FirstReplacement}}</h2>
+<p><strong>Status:</strong> <span class="{{if eq .Outcome "automatic"}}automatic{{end}}">{{.Outcome}}</span> · <strong>Category:</strong> {{.Candidate.Category}} · <strong>Location:</strong> {{.Location}}</p>
+{{if .ConflictIDs}}<p class="error"><strong>Conflict:</strong> overlaps applied candidate(s) {{range .ConflictIDs}}<a href="#{{.}}">{{.}}</a> {{end}}. Reject one before applying the other.</p>{{end}}
+<p>First review: <strong>{{.Candidate.FirstConfidence}}</strong>, proposed <code>{{.Candidate.FirstReplacement}}</code> — {{.Candidate.Reason}}</p>
+<p>Isolated verification: <strong>{{.Candidate.Verification}}</strong>, proposed <code>{{.Candidate.VerifiedReplacement}}</code></p>
+<pre>{{.Context}}</pre>
+<form class="inline" method="post" action="/candidates/{{.Candidate.ID}}/decision"><input type="hidden" name="decision" value="accept"><button type="submit">Accept first proposal</button></form>
+<form class="inline" method="post" action="/candidates/{{.Candidate.ID}}/decision"><input type="hidden" name="decision" value="reject"><button type="submit">Reject / keep original</button></form>
+{{if eq .Candidate.Kind "text"}}<form method="post" action="/candidates/{{.Candidate.ID}}/decision"><input type="hidden" name="decision" value="modify"><label>Modified replacement <input type="text" name="replacement" value="{{.Candidate.FirstReplacement}}" required></label><button type="submit">Save modified replacement</button></form>{{end}}
+{{if .History}}<details><summary>Decision history ({{len .History}})</summary><ol>{{range .History}}<li>{{.CreatedAt}} — {{.Decision}}{{if .Replacement}}: <code>{{.Replacement}}</code>{{end}}</li>{{end}}</ol></details>{{end}}
+</section>{{else}}<p>No candidates match this filter.</p>{{end}}
+<p>{{if .HasPrevious}}<a href="?filter={{urlquery .Filter}}&page={{.PreviousPage}}">Previous</a>{{end}} {{if .HasNext}}<a href="?filter={{urlquery .Filter}}&page={{.NextPage}}">Next</a>{{end}}</p>
+</body></html>`))
 
 var settingsTemplate = template.Must(template.New("settings").Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Settings — Kindle Go</title><style>
