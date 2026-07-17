@@ -25,6 +25,9 @@ type Options struct {
 	ParagraphIndent  string
 	ParagraphSpacing string
 	TextAlign        string
+	Cover            *bool
+	MergeLines       *bool
+	TrimBlankLines   *bool
 }
 
 func (s *Service) PreviewTXT(ctx context.Context, bookID string, opts Options) (converter.TXTAnalysis, error) {
@@ -39,7 +42,10 @@ func (s *Service) PreviewTXT(ctx context.Context, bookID string, opts Options) (
 	if err != nil {
 		return converter.TXTAnalysis{}, err
 	}
-	params := s.parameters(book, "epub", opts)
+	params, err := s.parameters(ctx, book, "epub", opts)
+	if err != nil {
+		return converter.TXTAnalysis{}, err
+	}
 	cfg := txtconfig.Defaults()
 	cfg.Metadata = params.Metadata
 	cfg.TXT = params.TXT
@@ -65,16 +71,25 @@ type Parameters struct {
 	DefaultLanguage string                   `json:"default_language"`
 }
 
-type Service struct {
-	library *library.Service
-	tasks   *task.Service
-	base    txtconfig.Config
-	now     func() time.Time
+type DefaultsProvider interface {
+	ConversionConfig(context.Context) (txtconfig.Config, error)
 }
 
-func NewService(libraryService *library.Service, taskService *task.Service, base txtconfig.Config) *Service {
+type Service struct {
+	library  *library.Service
+	tasks    *task.Service
+	base     txtconfig.Config
+	defaults DefaultsProvider
+	now      func() time.Time
+}
+
+func NewService(libraryService *library.Service, taskService *task.Service, base txtconfig.Config, providers ...DefaultsProvider) *Service {
 	txtconfig.Normalize(&base)
-	return &Service{library: libraryService, tasks: taskService, base: base, now: time.Now}
+	service := &Service{library: libraryService, tasks: taskService, base: base, now: time.Now}
+	if len(providers) != 0 {
+		service.defaults = providers[0]
+	}
+	return service
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, error) {
@@ -115,7 +130,10 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 		if book.SourceFormat != "txt" && book.SourceFormat != "epub" {
 			return nil, fmt.Errorf("%s files are not convertible", book.SourceFormat)
 		}
-		parameters := s.parameters(book, format, req.Options)
+		parameters, err := s.parameters(ctx, book, format, req.Options)
+		if err != nil {
+			return nil, err
+		}
 		encoded, err := json.Marshal(parameters)
 		if err != nil {
 			return nil, err
@@ -129,8 +147,15 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 	return s.tasks.CreateMany(ctx, requests)
 }
 
-func (s *Service) parameters(book library.Book, format string, opts Options) Parameters {
+func (s *Service) parameters(ctx context.Context, book library.Book, format string, opts Options) (Parameters, error) {
 	cfg := s.base
+	if s.defaults != nil {
+		var err error
+		cfg, err = s.defaults.ConversionConfig(ctx)
+		if err != nil {
+			return Parameters{}, err
+		}
+	}
 	cfg.Metadata.Title = firstNonBlank(opts.Title, strings.TrimSuffix(book.Original.DisplayName, filepath.Ext(book.Original.DisplayName)))
 	if strings.TrimSpace(opts.Author) != "" {
 		cfg.Metadata.Author = strings.TrimSpace(opts.Author)
@@ -159,6 +184,15 @@ func (s *Service) parameters(book library.Book, format string, opts Options) Par
 	if strings.TrimSpace(opts.TextAlign) != "" {
 		cfg.Style.TextAlign = strings.TrimSpace(opts.TextAlign)
 	}
+	if opts.Cover != nil {
+		cfg.Output.Cover = *opts.Cover
+	}
+	if opts.MergeLines != nil {
+		cfg.TXT.MergeLines = *opts.MergeLines
+	}
+	if opts.TrimBlankLines != nil {
+		cfg.TXT.TrimBlankLines = *opts.TrimBlankLines
+	}
 	txtconfig.Normalize(&cfg)
 	metadata := cfg.Metadata
 	if book.SourceFormat == "epub" {
@@ -168,7 +202,7 @@ func (s *Service) parameters(book library.Book, format string, opts Options) Par
 		InputFormat: book.SourceFormat, OutputFormat: format, ExpectedSHA256: book.Original.SHA256,
 		Metadata: metadata, TXT: cfg.TXT, Style: cfg.Style, Cover: cfg.Output.Cover,
 		DefaultLanguage: cfg.Metadata.Language,
-	}
+	}, nil
 }
 
 func firstNonBlank(values ...string) string {

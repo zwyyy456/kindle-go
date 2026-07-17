@@ -146,26 +146,26 @@ func (s *Service) LatestKindleFiles(ctx context.Context, showEPUB bool) ([]Kindl
 		if err != nil {
 			return nil, err
 		}
-		var selected store.File
+		var selected []File
 		for _, file := range files {
 			if file.Role == "artifact" && file.Format == "azw3" {
-				selected = file
+				selected = append(selected, fileFromStore(file))
 				break
 			}
 		}
-		if selected.ID == "" && showEPUB {
+		if showEPUB {
 			for _, file := range files {
-				if (file.Role == "artifact" || file.Role == "revision") && file.Format == "epub" {
-					selected = file
+				if file.Format == "epub" && (file.Role == "artifact" || file.Role == "revision" || file.Role == "original") {
+					selected = append(selected, fileFromStore(file))
 					break
 				}
 			}
 		}
-		if selected.ID == "" && kindleOriginalFormat(storedBook.Original.Format) {
-			selected = storedBook.Original
+		if len(selected) == 0 && kindleLegacyOriginalFormat(storedBook.Original.Format) {
+			selected = append(selected, fileFromStore(storedBook.Original))
 		}
-		if selected.ID != "" {
-			result = append(result, KindleBook{Book: bookFromStore(storedBook), File: fileFromStore(selected)})
+		if len(selected) != 0 {
+			result = append(result, KindleBook{Book: bookFromStore(storedBook), Files: selected})
 		}
 	}
 	return result, nil
@@ -193,7 +193,13 @@ func (s *Service) ListBooks(ctx context.Context, query BookQuery) (BookPage, err
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	books, total, err := s.store.BooksPage(ctx, query.Search, query.Sort, pageSize, (page-1)*pageSize)
+	statusFilter := query.StatusFilter
+	switch statusFilter {
+	case "", "not_started", "queued", "running", "completed", "failed", "canceled":
+	default:
+		statusFilter = ""
+	}
+	books, total, err := s.store.BooksPage(ctx, query.Search, query.Sort, statusFilter, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return BookPage{}, err
 	}
@@ -214,6 +220,7 @@ func booksFromStore(values []store.Book) []Book {
 func bookFromStore(value store.Book) Book {
 	return Book{
 		ID: value.ID, DisplayName: value.DisplayName, SourceFormat: value.SourceFormat, ImportedAt: value.ImportedAt,
+		ProofreadStatus: value.ProofreadStatus,
 		LegacyLastError: value.LegacyLastError,
 		Original:        fileFromStore(value.Original), LatestArtifact: fileFromStore(value.LatestArtifact),
 	}
@@ -227,9 +234,9 @@ func fileFromStore(value store.File) File {
 	}
 }
 
-func kindleOriginalFormat(format string) bool {
+func kindleLegacyOriginalFormat(format string) bool {
 	switch format {
-	case "azw3", "mobi", "pdf", "txt":
+	case "azw3", "mobi", "pdf":
 		return true
 	default:
 		return false

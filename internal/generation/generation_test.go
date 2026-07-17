@@ -12,6 +12,7 @@ import (
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/store"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
@@ -70,8 +71,12 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 		t.Fatalf("artifact formats = %#v in %#v", formats, detail.Files)
 	}
 	kindle, err := libraryService.LatestKindleFiles(context.Background(), false)
-	if err != nil || len(kindle) != 1 || kindle[0].File.Format != "azw3" {
+	if err != nil || len(kindle) != 1 || len(kindle[0].Files) != 1 || kindle[0].Files[0].Format != "azw3" {
 		t.Fatalf("Kindle projection = %#v, %v", kindle, err)
+	}
+	kindleWithEPUB, err := libraryService.LatestKindleFiles(context.Background(), true)
+	if err != nil || len(kindleWithEPUB) != 1 || len(kindleWithEPUB[0].Files) != 2 || kindleWithEPUB[0].Files[0].Format != "azw3" || kindleWithEPUB[0].Files[1].Format != "epub" {
+		t.Fatalf("Kindle EPUB projection = %#v, %v", kindleWithEPUB, err)
 	}
 	again, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}, Options: Options{Title: "第二版"}})
 	if err != nil {
@@ -99,6 +104,45 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("runner did not stop")
+	}
+}
+
+func TestQueuedGenerationFreezesGlobalDefaults(t *testing.T) {
+	storage, libraryService, taskService, book := newGenerationTest(t)
+	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{})
+	if err := settingsService.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(libraryService, taskService, txtconfig.Defaults(), settingsService)
+	values, err := settingsService.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values.Style.LineHeight = 1.9
+	if err := settingsService.Save(context.Background(), values); err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values.Style.LineHeight = 2.2
+	if err := settingsService.Save(context.Background(), values); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstParams, secondParams Parameters
+	if err := json.Unmarshal([]byte(first[0].ParametersJSON), &firstParams); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(second[0].ParametersJSON), &secondParams); err != nil {
+		t.Fatal(err)
+	}
+	if firstParams.Style.LineHeight != 1.9 || secondParams.Style.LineHeight != 2.2 {
+		t.Fatalf("snapshots = %#v, %#v", firstParams.Style, secondParams.Style)
 	}
 }
 

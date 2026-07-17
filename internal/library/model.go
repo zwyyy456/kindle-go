@@ -48,15 +48,16 @@ type CompatibilityReport struct {
 }
 
 type KindleBook struct {
-	Book Book
-	File File
+	Book  Book
+	Files []File
 }
 
 type BookQuery struct {
-	Search   string
-	Sort     string
-	Page     int
-	PageSize int
+	Search       string
+	Sort         string
+	StatusFilter string
+	Page         int
+	PageSize     int
 }
 
 type BookPage struct {
@@ -72,6 +73,7 @@ type Book struct {
 	ID              string
 	DisplayName     string
 	SourceFormat    string
+	ProofreadStatus string
 	ImportedAt      time.Time
 	LegacyLastError string
 	Original        File

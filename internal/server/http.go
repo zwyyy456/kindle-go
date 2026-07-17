@@ -12,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
@@ -23,6 +25,7 @@ type Handler struct {
 	Library    *library.Service
 	Generation *generation.Service
 	Tasks      *task.Service
+	Settings   *appsettings.Service
 }
 
 func (h Handler) WebMux() http.Handler {
@@ -33,6 +36,7 @@ func (h Handler) WebMux() http.Handler {
 	mux.HandleFunc("/files/", h.handleFileRoute)
 	mux.HandleFunc("/tasks", h.handleTasks)
 	mux.HandleFunc("/tasks/", h.handleTaskRoute)
+	mux.HandleFunc("/settings", h.handleSettings)
 	return mux
 }
 
@@ -49,22 +53,22 @@ func (h Handler) handleWebIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, err := h.Library.ListBooks(r.Context(), library.BookQuery{
-		Search: r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"), Page: parseInt(r.URL.Query().Get("page")),
+		Search: r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"), StatusFilter: r.URL.Query().Get("status"), Page: parseInt(r.URL.Query().Get("page")),
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	data := webPageData{
-		Records: h.recordViews(page.Books, false),
+		Records: h.recordViews(page.Books),
 		Message: r.URL.Query().Get("message"),
-		Query:   r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"),
+		Query:   r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"), StatusFilter: r.URL.Query().Get("status"),
 		Page: page.Page, PreviousPage: page.Page - 1, NextPage: page.Page + 1,
 		HasPrevious: page.HasPrevious, HasNext: page.HasNext, Total: page.Total,
 	}
 	if token := r.URL.Query().Get("duplicate"); token != "" {
 		if pending, ok := h.Library.PendingDuplicate(token); ok {
-			data.Duplicate = duplicateView{Token: token, Filename: pending.Filename, Existing: h.recordViews(pending.Existing, false)}
+			data.Duplicate = duplicateView{Token: token, Filename: pending.Filename, Existing: h.recordViews(pending.Existing)}
 		} else {
 			data.Message = "Duplicate confirmation expired; import the file again."
 		}
@@ -137,7 +141,16 @@ func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	books, err := h.Library.LatestKindleFiles(r.Context(), false)
+	showEPUB := false
+	if h.Settings != nil {
+		values, err := h.Settings.Current(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		showEPUB = values.KindleShowEPUB
+	}
+	books, err := h.Library.LatestKindleFiles(r.Context(), showEPUB)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -151,7 +164,7 @@ func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
 		records = append(records, recordView{
 			ID: value.Book.ID, OriginalName: value.Book.DisplayName,
 			UploadedAt: value.Book.ImportedAt.Format("2006-01-02 15:04"),
-			Files:      []fileView{newFileView(value.File)},
+			Files:      fileViews(value.Files),
 		})
 	}
 	data := kindlePageData{
@@ -262,6 +275,14 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 		Files: files, Tasks: taskViews(tasks), Message: r.URL.Query().Get("message"), Compatibility: detail.Compatibility,
 		CanGenerate: detail.Book.SourceFormat == "txt" || (detail.Compatibility != nil && detail.Compatibility.Status == "passed"),
 	}
+	if h.Settings != nil {
+		defaults, err := h.Settings.Current(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.Defaults = defaults
+	}
 	if err := bookTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -328,7 +349,90 @@ func generationOptionsFromForm(r *http.Request) generation.Options {
 		H1Regex: r.Form.Get("h1_regex"), H2Regex: r.Form.Get("h2_regex"),
 		SplitLevel: parseInt(r.Form.Get("split_level")), LineHeight: parseFloat(r.Form.Get("line_height")),
 		ParagraphSpacing: r.Form.Get("paragraph_spacing"), ParagraphIndent: r.Form.Get("paragraph_indent"), TextAlign: r.Form.Get("text_align"),
+		Cover: formBool(r, "cover"), MergeLines: formBool(r, "merge_lines"), TrimBlankLines: formBool(r, "trim_blank_lines"),
 	}
+}
+
+func formBool(r *http.Request, name string) *bool {
+	if r.Form.Get(name+"_present") == "" {
+		return nil
+	}
+	value := r.Form.Get(name) != ""
+	return &value
+}
+
+func (h Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if h.Settings == nil {
+		http.Error(w, "settings service is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		values, err := settingsFromForm(r)
+		if err == nil {
+			err = h.Settings.Save(r.Context(), values)
+		}
+		if err != nil {
+			http.Redirect(w, r, "/settings?message="+urlMessage(err.Error()), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/settings?message=saved", http.StatusSeeOther)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	values, err := h.Settings.Current(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := settingsPageData{
+		Values: values, Runtime: h.Settings.Runtime(), Diagnostics: appsettings.BasicDiagnostics(),
+		Message: r.URL.Query().Get("message"), DropRegex: strings.Join(values.TXT.DropRegex, "\n"),
+	}
+	replacements, _ := json.Marshal(values.TXT.Replace)
+	data.ReplaceJSON = string(replacements)
+	if err := settingsTemplate.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func settingsFromForm(r *http.Request) (appsettings.Values, error) {
+	values := appsettings.Values{
+		Author: r.Form.Get("author"), Language: r.Form.Get("language"), Cover: r.Form.Get("cover") != "",
+		KindleShowEPUB: r.Form.Get("kindle_show_epub") != "",
+		TXT: txtconfig.TXTConfig{
+			H1Regex: r.Form.Get("h1_regex"), H2Regex: r.Form.Get("h2_regex"), SplitLevel: parseInt(r.Form.Get("split_level")),
+			MergeLines: r.Form.Get("merge_lines") != "", TrimBlankLines: r.Form.Get("trim_blank_lines") != "",
+			DropRegex: nonBlankLines(r.Form.Get("drop_regex")),
+		},
+		Style: txtconfig.Style{
+			LineHeight: parseFloat(r.Form.Get("line_height")), ParagraphIndent: r.Form.Get("paragraph_indent"),
+			ParagraphSpacing: r.Form.Get("paragraph_spacing"), TextAlign: r.Form.Get("text_align"),
+		},
+		Proofread: appsettings.Proofread{Model: r.Form.Get("proofread_model"), BatchSize: parseInt(r.Form.Get("proofread_batch_size")), Concurrency: parseInt(r.Form.Get("proofread_concurrency"))},
+	}
+	if raw := strings.TrimSpace(r.Form.Get("replace_json")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &values.TXT.Replace); err != nil {
+			return appsettings.Values{}, fmt.Errorf("replacement rules must be valid JSON: %w", err)
+		}
+	}
+	return values, nil
+}
+
+func nonBlankLines(raw string) []string {
+	var values []string
+	for _, line := range strings.Split(raw, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			values = append(values, line)
+		}
+	}
+	return values
 }
 
 func (h Handler) handleDeleteBook(w http.ResponseWriter, r *http.Request, bookID string) {
@@ -475,42 +579,30 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/books/"+original.BookID+"?message="+urlMessage(message), http.StatusSeeOther)
 }
 
-func (h Handler) recordViews(records []library.Book, kindle bool) []recordView {
+func (h Handler) recordViews(records []library.Book) []recordView {
 	views := make([]recordView, 0, len(records))
 	for _, record := range records {
 		view := recordView{
-			ID:           record.ID,
-			OriginalName: record.DisplayName,
-			UploadedAt:   record.ImportedAt.Format("2006-01-02 15:04"),
-			LastError:    record.LegacyLastError,
+			ID:              record.ID,
+			OriginalName:    record.DisplayName,
+			UploadedAt:      record.ImportedAt.Format("2006-01-02 15:04"),
+			LastError:       record.LegacyLastError,
+			ProofreadStatus: record.ProofreadStatus,
 		}
-		view.Files = displayFileViews(record, kindle)
+		view.Files = displayFileViews(record)
 		view.InputFormat = strings.ToLower(record.Original.Format)
-		view.Convertible = !kindle && (view.InputFormat == "txt" || view.InputFormat == "epub")
 		view.TitleDefault = strings.TrimSuffix(record.Original.DisplayName, filepath.Ext(record.Original.DisplayName))
 		if view.TitleDefault == "" {
 			view.TitleDefault = strings.TrimSuffix(record.DisplayName, filepath.Ext(record.DisplayName))
 		}
-		if len(view.Files) > 0 || !kindle {
-			views = append(views, view)
-		}
+		views = append(views, view)
 	}
 	return views
 }
 
-func displayFileViews(record library.Book, kindle bool) []fileView {
+func displayFileViews(record library.Book) []fileView {
 	original := record.Original
 	output := record.LatestArtifact
-	if kindle {
-		if output.ID != "" && kindleFormat(output.Format) {
-			return []fileView{newFileView(output)}
-		}
-		if original.ID != "" && kindleFormat(original.Format) {
-			return []fileView{newFileView(original)}
-		}
-		return nil
-	}
-
 	var files []fileView
 	if original.ID != "" {
 		files = append(files, newFileView(original))
@@ -534,17 +626,16 @@ func newFileView(file library.File) fileView {
 	}
 }
 
-func downloadURL(fileID string) string {
-	return "/files/" + fileID + "/download"
+func fileViews(files []library.File) []fileView {
+	views := make([]fileView, 0, len(files))
+	for _, file := range files {
+		views = append(views, newFileView(file))
+	}
+	return views
 }
 
-func kindleFormat(format string) bool {
-	switch strings.ToLower(format) {
-	case "azw3", "mobi", "pdf", "txt":
-		return true
-	default:
-		return false
-	}
+func downloadURL(fileID string) string {
+	return "/files/" + fileID + "/download"
 }
 
 func humanSize(size int64) string {
@@ -570,6 +661,7 @@ type webPageData struct {
 	Duplicate    duplicateView
 	Query        string
 	Sort         string
+	StatusFilter string
 	Page         int
 	PreviousPage int
 	NextPage     int
@@ -596,6 +688,16 @@ type bookPageData struct {
 	Message       string
 	Compatibility *library.CompatibilityReport
 	CanGenerate   bool
+	Defaults      appsettings.Values
+}
+
+type settingsPageData struct {
+	Values      appsettings.Values
+	Runtime     appsettings.Runtime
+	Diagnostics appsettings.Diagnostics
+	Message     string
+	DropRegex   string
+	ReplaceJSON string
 }
 
 type tasksPageData struct {
@@ -616,14 +718,14 @@ type txtPreviewPageData struct {
 }
 
 type recordView struct {
-	ID           string
-	OriginalName string
-	UploadedAt   string
-	LastError    string
-	Files        []fileView
-	Convertible  bool
-	InputFormat  string
-	TitleDefault string
+	ID              string
+	OriginalName    string
+	UploadedAt      string
+	LastError       string
+	Files           []fileView
+	InputFormat     string
+	TitleDefault    string
+	ProofreadStatus string
 }
 
 type fileView struct {
@@ -690,6 +792,7 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
 </head>
 <body>
   <h1>Kindle Go</h1>
+  <p><a href="/tasks">Tasks</a> · <a href="/settings">Settings</a></p>
   <p class="muted">Upload files from this computer, convert when needed, then download from Kindle.</p>
   {{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
 
@@ -717,7 +820,8 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
 
   <form method="get" action="/books">
     <input type="text" name="q" value="{{.Query}}" placeholder="Search book names">
-    <select name="sort"><option value="">Newest first</option><option value="name_asc" {{if eq .Sort "name_asc"}}selected{{end}}>Name A–Z</option><option value="imported_asc" {{if eq .Sort "imported_asc"}}selected{{end}}>Oldest first</option></select>
+    <select name="status"><option value="">All proofread statuses</option><option value="not_started" {{if eq .StatusFilter "not_started"}}selected{{end}}>Not started</option><option value="queued" {{if eq .StatusFilter "queued"}}selected{{end}}>Queued</option><option value="running" {{if eq .StatusFilter "running"}}selected{{end}}>Running</option><option value="completed" {{if eq .StatusFilter "completed"}}selected{{end}}>Completed</option><option value="failed" {{if eq .StatusFilter "failed"}}selected{{end}}>Failed</option><option value="canceled" {{if eq .StatusFilter "canceled"}}selected{{end}}>Canceled</option></select>
+    <select name="sort"><option value="">Newest first</option><option value="name_asc" {{if eq .Sort "name_asc"}}selected{{end}}>Name A–Z</option><option value="imported_asc" {{if eq .Sort "imported_asc"}}selected{{end}}>Oldest first</option><option value="status_asc" {{if eq .Sort "status_asc"}}selected{{end}}>Proofread status</option></select>
     <button type="submit">Apply</button>
   </form>
   <p class="muted">{{.Total}} book(s), page {{.Page}}</p>
@@ -725,7 +829,7 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
   {{range .Records}}
   <section class="record">
     <h2><a href="/books/{{.ID}}">{{.OriginalName}}</a></h2>
-    <p class="muted">Uploaded {{.UploadedAt}}</p>
+    <p class="muted">Uploaded {{.UploadedAt}} · proofread: {{.ProofreadStatus}}</p>
     {{if .LastError}}<p class="error">{{.LastError}}</p>{{end}}
     <div class="files">
       {{range .Files}}
@@ -737,7 +841,7 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
   {{else}}
   <p>No uploads yet.</p>
   {{end}}
-  <p>{{if .HasPrevious}}<a href="/books?q={{urlquery .Query}}&sort={{.Sort}}&page={{.PreviousPage}}">Previous</a>{{end}} {{if .HasNext}}<a href="/books?q={{urlquery .Query}}&sort={{.Sort}}&page={{.NextPage}}">Next</a>{{end}}</p>
+  <p>{{if .HasPrevious}}<a href="/books?q={{urlquery .Query}}&status={{.StatusFilter}}&sort={{.Sort}}&page={{.PreviousPage}}">Previous</a>{{end}} {{if .HasNext}}<a href="/books?q={{urlquery .Query}}&status={{.StatusFilter}}&sort={{.Sort}}&page={{.NextPage}}">Next</a>{{end}}</p>
 </body>
 </html>`))
 
@@ -770,16 +874,19 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
       <label><input type="checkbox" name="format" value="azw3" checked> AZW3</label>
       {{if eq .Book.InputFormat "txt"}}<label><input type="checkbox" name="format" value="epub"> EPUB</label>{{end}}
       <label>Title <input type="text" name="title" value="{{.Book.TitleDefault}}"></label>
-      <label>Author <input type="text" name="author"></label>
-      <label>Language <input type="text" name="language"></label>
+      <label>Author <input type="text" name="author" value="{{.Defaults.Author}}"></label>
+      <label>Language <input type="text" name="language" value="{{.Defaults.Language}}"></label>
+      <input type="hidden" name="cover_present" value="1"><label><input type="checkbox" name="cover" value="1" {{if .Defaults.Cover}}checked{{end}}> Generate text cover</label>
       {{if eq .Book.InputFormat "txt"}}
-      <label>H1 regex <input type="text" name="h1_regex"></label>
-      <label>H2 regex <input type="text" name="h2_regex"></label>
-      <label>Split level <input type="number" name="split_level" min="1" max="2"></label>
-      <label>Line height <input type="text" name="line_height"></label>
-      <label>Paragraph spacing <input type="text" name="paragraph_spacing"></label>
-      <label>Paragraph indent <input type="text" name="paragraph_indent"></label>
-      <label>Text align <input type="text" name="text_align"></label>
+      <label>H1 regex <input type="text" name="h1_regex" value="{{.Defaults.TXT.H1Regex}}"></label>
+      <label>H2 regex <input type="text" name="h2_regex" value="{{.Defaults.TXT.H2Regex}}"></label>
+      <label>Split level <input type="number" name="split_level" min="1" max="2" value="{{.Defaults.TXT.SplitLevel}}"></label>
+      <input type="hidden" name="merge_lines_present" value="1"><label><input type="checkbox" name="merge_lines" value="1" {{if .Defaults.TXT.MergeLines}}checked{{end}}> Merge wrapped lines</label>
+      <input type="hidden" name="trim_blank_lines_present" value="1"><label><input type="checkbox" name="trim_blank_lines" value="1" {{if .Defaults.TXT.TrimBlankLines}}checked{{end}}> Compress consecutive blank lines</label>
+      <label>Line height <input type="text" name="line_height" value="{{.Defaults.Style.LineHeight}}"></label>
+      <label>Paragraph spacing <input type="text" name="paragraph_spacing" value="{{.Defaults.Style.ParagraphSpacing}}"></label>
+      <label>Paragraph indent <input type="text" name="paragraph_indent" value="{{.Defaults.Style.ParagraphIndent}}"></label>
+      <label>Text align <input type="text" name="text_align" value="{{.Defaults.Style.TextAlign}}"></label>
       {{end}}
       {{if eq .Book.InputFormat "txt"}}<button type="submit" formaction="/books/{{.Book.ID}}/txt-preview">Preview TXT</button>{{end}}
       <button type="submit">Queue generation</button>
@@ -834,6 +941,47 @@ var tasksTemplate = template.Must(template.New("tasks").Parse(`<!doctype html>
 <table><thead><tr><th>Book</th><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th></tr></thead><tbody>
 {{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td>{{.Type}}</td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
 </tbody></table></body></html>`))
+
+var settingsTemplate = template.Must(template.New("settings").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Settings — Kindle Go</title><style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.45; color: #1f2933; }
+fieldset { border: 1px solid #ccd3dc; padding: 16px; margin: 18px 0; }
+label { display: block; margin: 8px 0; } input[type=text], input[type=number], textarea { min-width: 420px; max-width: 100%; padding: 6px; }
+.muted { color: #627282; }
+</style></head><body>
+<p><a href="/books">← Library</a></p><h1>Global settings</h1>{{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
+<fieldset><legend>Runtime (startup only)</legend>
+<p>Library: {{.Runtime.LibraryDir}} <span class="muted">({{.Runtime.LibrarySource}})</span></p>
+<p>Web UI: {{.Runtime.WebAddr}} <span class="muted">({{.Runtime.WebAddrSource}})</span></p>
+<p>Kindle: {{.Runtime.KindleAddr}} <span class="muted">({{.Runtime.KindleSource}})</span></p>
+{{if .Runtime.ConfigPath}}<p>Config: {{.Runtime.ConfigPath}}</p>{{end}}
+</fieldset>
+<form method="post" action="/settings">
+<fieldset><legend>TXT conversion defaults</legend>
+<label>Default author <input type="text" name="author" value="{{.Values.Author}}"></label>
+<label>Default language <input type="text" name="language" value="{{.Values.Language}}" required></label>
+<label><input type="checkbox" name="cover" value="1" {{if .Values.Cover}}checked{{end}}> Generate text cover</label>
+<label>H1 regex <input type="text" name="h1_regex" value="{{.Values.TXT.H1Regex}}" required></label>
+<label>H2 regex <input type="text" name="h2_regex" value="{{.Values.TXT.H2Regex}}" required></label>
+<label>Split level <input type="number" name="split_level" min="1" max="2" value="{{.Values.TXT.SplitLevel}}" required></label>
+<label><input type="checkbox" name="merge_lines" value="1" {{if .Values.TXT.MergeLines}}checked{{end}}> Merge wrapped lines</label>
+<label><input type="checkbox" name="trim_blank_lines" value="1" {{if .Values.TXT.TrimBlankLines}}checked{{end}}> Compress consecutive blank lines</label>
+<label>Drop regexes (one per line)<textarea name="drop_regex" rows="4">{{.DropRegex}}</textarea></label>
+<label>Replacement rules (JSON array)<textarea name="replace_json" rows="4">{{.ReplaceJSON}}</textarea></label>
+<label>Line height <input type="text" name="line_height" value="{{.Values.Style.LineHeight}}" required></label>
+<label>Paragraph indent <input type="text" name="paragraph_indent" value="{{.Values.Style.ParagraphIndent}}" required></label>
+<label>Paragraph spacing <input type="text" name="paragraph_spacing" value="{{.Values.Style.ParagraphSpacing}}" required></label>
+<label>Text align <input type="text" name="text_align" value="{{.Values.Style.TextAlign}}" required></label>
+</fieldset>
+<fieldset><legend>Kindle page</legend><label><input type="checkbox" name="kindle_show_epub" value="1" {{if .Values.KindleShowEPUB}}checked{{end}}> Show latest EPUB alongside latest AZW3</label></fieldset>
+<fieldset><legend>Proofreading defaults</legend>
+<label>Codex model (blank uses Codex default) <input type="text" name="proofread_model" value="{{.Values.Proofread.Model}}"></label>
+<label>Batch size <input type="number" name="proofread_batch_size" min="1" max="200" value="{{.Values.Proofread.BatchSize}}" required></label>
+<label>Concurrency <input type="number" name="proofread_concurrency" min="1" max="16" value="{{.Values.Proofread.Concurrency}}" required></label>
+</fieldset>
+<button type="submit">Save global defaults</button></form>
+<fieldset><legend>Basic diagnostics</legend><p>python3: {{if .Diagnostics.PythonPath}}{{.Diagnostics.PythonPath}}{{else}}not found{{end}}</p><p>Codex CLI: {{if .Diagnostics.CodexPath}}{{.Diagnostics.CodexPath}}{{else}}not found{{end}}</p><p class="muted">Codex login/model availability is checked explicitly before proofreading; this page does not send book content.</p></fieldset>
+</body></html>`))
 
 var txtPreviewTemplate = template.Must(template.New("txt-preview").Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>TXT Preview — Kindle Go</title></head><body>

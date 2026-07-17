@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/flashdict/kindle2flashdict/internal/store"
+	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
 func TestImportEnforcesExactTXTLimitWithoutResidue(t *testing.T) {
@@ -195,6 +196,30 @@ func TestListBooksUsesStablePaginationSortAndLiteralSearch(t *testing.T) {
 	search, err := service.ListBooks(context.Background(), BookQuery{Search: "%", PageSize: 50})
 	if err != nil || search.Total != 1 || search.Books[0].DisplayName != "100%.txt" {
 		t.Fatalf("literal search = %#v, %v", search, err)
+	}
+}
+
+func TestListBooksFiltersDerivedProofreadStatus(t *testing.T) {
+	service, _ := newTestService(t)
+	first, err := service.Import(context.Background(), ImportRequest{Filename: "one.txt", Reader: strings.NewReader("one")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Import(context.Background(), ImportRequest{Filename: "two.txt", Reader: strings.NewReader("two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskService := task.NewService(service.store)
+	if _, err := taskService.Create(context.Background(), task.CreateRequest{BookID: second.Book.ID, Type: task.Proofread, InputFileID: second.Book.Original.ID}); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := service.ListBooks(context.Background(), BookQuery{StatusFilter: "queued"})
+	if err != nil || queued.Total != 1 || queued.Books[0].ID != second.Book.ID || queued.Books[0].ProofreadStatus != "queued" {
+		t.Fatalf("queued page = %#v, %v", queued, err)
+	}
+	notStarted, err := service.ListBooks(context.Background(), BookQuery{StatusFilter: "not_started"})
+	if err != nil || notStarted.Total != 1 || notStarted.Books[0].ID != first.Book.ID || notStarted.Books[0].ProofreadStatus != "not_started" {
+		t.Fatalf("not-started page = %#v, %v", notStarted, err)
 	}
 }
 

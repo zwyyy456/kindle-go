@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/store"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
@@ -229,6 +231,90 @@ func TestIncompatibleEPUBShowsStructuredReportAndBlocksGeneration(t *testing.T) 
 	}
 }
 
+func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
+	handler, service, _ := newHTTPTestHandler(t)
+	data := epubArchiveForHTTP(t, map[string]string{
+		"META-INF/container.xml": `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+		"book.opf":               `<package xmlns="http://www.idpf.org/2007/opf"><metadata/><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>`,
+		"c.xhtml":                `<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文</p></body></html>`,
+	})
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.epub", Reader: bytes.NewReader(data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := httptest.NewRecorder()
+	handler.KindleMux().ServeHTTP(before, httptest.NewRequest(http.MethodGet, "/?all=1", nil))
+	if strings.Contains(before.Body.String(), result.Book.DisplayName) {
+		t.Fatalf("EPUB shown before toggle: %q", before.Body.String())
+	}
+	values, err := handler.Settings.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsForm := url.Values{
+		"author": {values.Author}, "language": {values.Language}, "cover": {"1"},
+		"h1_regex": {values.TXT.H1Regex}, "h2_regex": {values.TXT.H2Regex}, "split_level": {"2"},
+		"merge_lines": {"1"}, "trim_blank_lines": {"1"}, "replace_json": {"[]"},
+		"line_height": {"1.8"}, "paragraph_indent": {values.Style.ParagraphIndent},
+		"paragraph_spacing": {values.Style.ParagraphSpacing}, "text_align": {values.Style.TextAlign},
+		"kindle_show_epub": {"1"}, "proofread_batch_size": {"20"}, "proofread_concurrency": {"3"},
+	}
+	settingsRequest := httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(settingsForm.Encode()))
+	settingsRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	settingsResponse := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(settingsResponse, settingsRequest)
+	if settingsResponse.Code != http.StatusSeeOther || !strings.Contains(settingsResponse.Header().Get("Location"), "saved") {
+		t.Fatalf("settings save = %d, %q", settingsResponse.Code, settingsResponse.Header().Get("Location"))
+	}
+	after := httptest.NewRecorder()
+	handler.KindleMux().ServeHTTP(after, httptest.NewRequest(http.MethodGet, "/?all=1", nil))
+	if after.Code != http.StatusOK || !strings.Contains(after.Body.String(), result.Book.DisplayName) || !strings.Contains(after.Body.String(), "EPUB") {
+		t.Fatalf("EPUB after toggle = %d, %q", after.Code, after.Body.String())
+	}
+	page := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Global settings") || !strings.Contains(page.Body.String(), "Codex CLI") {
+		t.Fatalf("settings page = %d, %q", page.Code, page.Body.String())
+	}
+}
+
+func TestBookFormDoesNotPersistPerBookConversionSettings(t *testing.T) {
+	handler, service, taskService := newHTTPTestHandler(t)
+	values, err := handler.Settings.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values.Style.LineHeight = 1.9
+	if err := handler.Settings.Save(context.Background(), values); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"format": {"epub"}, "line_height": {"2.4"}}
+	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/generate", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("generate status = %d", response.Code)
+	}
+	tasks, err := taskService.List(context.Background(), result.Book.ID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("task snapshot = %#v, %v", tasks, err)
+	}
+	var params generation.Parameters
+	if err := json.Unmarshal([]byte(tasks[0].ParametersJSON), &params); err != nil || params.Style.LineHeight != 2.4 {
+		t.Fatalf("task parameters = %#v, %v", params, err)
+	}
+	detail := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/books/"+result.Book.ID, nil))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `name="line_height" value="1.9"`) || strings.Contains(detail.Body.String(), `name="line_height" value="2.4"`) {
+		t.Fatalf("book defaults = %d, %q", detail.Code, detail.Body.String())
+	}
+}
+
 func epubArchiveForHTTP(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buffer bytes.Buffer
@@ -257,8 +343,12 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service)
 	service := library.New(storage)
 	t.Cleanup(func() { _ = service.Close() })
 	taskService := task.NewService(storage)
-	generationService := generation.NewService(service, taskService, txtconfig.Defaults())
-	return Handler{Library: service, Generation: generationService, Tasks: taskService}, service, taskService
+	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{LibraryDir: service.Root(), LibrarySource: "test"})
+	if err := settingsService.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	generationService := generation.NewService(service, taskService, txtconfig.Defaults(), settingsService)
+	return Handler{Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService}, service, taskService
 }
 
 func multipartRequest(t *testing.T, target, name, content string) *http.Request {

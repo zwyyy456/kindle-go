@@ -86,6 +86,7 @@ type Book struct {
 	ID              string
 	DisplayName     string
 	SourceFormat    string
+	ProofreadStatus string
 	ImportedAt      time.Time
 	LegacyLastError string
 	Original        File
@@ -220,7 +221,7 @@ func (s *Store) RecentBooks(ctx context.Context, cutoff time.Time) ([]Book, erro
 	return s.listBooks(ctx, `WHERE b.state = 'active' AND b.imported_at >= ? ORDER BY b.imported_at DESC, b.id DESC`, formatTime(cutoff))
 }
 
-func (s *Store) BooksPage(ctx context.Context, search, sortOrder string, limit, offset int) ([]Book, int, error) {
+func (s *Store) BooksPage(ctx context.Context, search, sortOrder, statusFilter string, limit, offset int) ([]Book, int, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -233,6 +234,10 @@ func (s *Store) BooksPage(ctx context.Context, search, sortOrder string, limit, 
 		where += ` AND b.display_name LIKE ? ESCAPE '\'`
 		args = append(args, "%"+escapeLike(strings.TrimSpace(search))+"%")
 	}
+	if statusFilter != "" {
+		where += ` AND ` + proofreadStatusSQL + ` = ?`
+		args = append(args, statusFilter)
+	}
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books b `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -243,6 +248,8 @@ func (s *Store) BooksPage(ctx context.Context, search, sortOrder string, limit, 
 		order = ` ORDER BY b.display_name COLLATE NOCASE ASC, b.id ASC`
 	case "imported_asc":
 		order = ` ORDER BY b.imported_at ASC, b.id ASC`
+	case "status_asc":
+		order = ` ORDER BY ` + proofreadStatusSQL + ` ASC, b.imported_at DESC, b.id DESC`
 	}
 	queryArgs := append(append([]any(nil), args...), limit, offset)
 	books, err := s.listBooks(ctx, where+order+` LIMIT ? OFFSET ?`, queryArgs...)
@@ -258,6 +265,7 @@ func escapeLike(value string) string {
 func (s *Store) listBooks(ctx context.Context, where string, args ...any) ([]Book, error) {
 	query := `
 SELECT b.id, b.display_name, b.source_format, b.imported_at, b.legacy_last_error,
+       ` + proofreadStatusSQL + `,
        o.id, o.state, o.format, o.display_name, o.rel_path, o.sha256, o.size_bytes, o.created_at,
        COALESCE(a.id, ''), COALESCE(a.state, ''), COALESCE(a.format, ''), COALESCE(a.display_name, ''),
        COALESCE(a.rel_path, ''), COALESCE(a.sha256, ''), COALESCE(a.size_bytes, 0), COALESCE(a.created_at, '')
@@ -279,7 +287,7 @@ LEFT JOIN files a ON a.id = (
 		var book Book
 		var imported, originalCreated, artifactCreated string
 		if err := rows.Scan(
-			&book.ID, &book.DisplayName, &book.SourceFormat, &imported, &book.LegacyLastError,
+			&book.ID, &book.DisplayName, &book.SourceFormat, &imported, &book.LegacyLastError, &book.ProofreadStatus,
 			&book.Original.ID, &book.Original.State, &book.Original.Format, &book.Original.DisplayName, &book.Original.RelPath, &book.Original.SHA256, &book.Original.Size, &originalCreated,
 			&book.LatestArtifact.ID, &book.LatestArtifact.State, &book.LatestArtifact.Format, &book.LatestArtifact.DisplayName, &book.LatestArtifact.RelPath, &book.LatestArtifact.SHA256, &book.LatestArtifact.Size, &artifactCreated,
 		); err != nil {
@@ -307,6 +315,12 @@ LEFT JOIN files a ON a.id = (
 	}
 	return books, rows.Err()
 }
+
+const proofreadStatusSQL = `COALESCE((
+    SELECT t.status FROM tasks t
+    WHERE t.book_id = b.id AND t.type = 'proofread'
+    ORDER BY t.queue_seq DESC LIMIT 1
+), 'not_started')`
 
 func hashFile(path string) (string, int64, error) {
 	file, err := os.Open(path)

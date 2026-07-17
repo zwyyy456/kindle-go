@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/server"
+	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/store"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
@@ -39,7 +41,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("usage: serve [options]")
 	}
 
-	baseCfg, _, err := txtconfig.Load(*configPath)
+	baseCfg, resolvedConfig, err := txtconfig.Load(*configPath)
 	if err != nil {
 		return err
 	}
@@ -62,8 +64,18 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 	libraryService := library.New(storage)
 	defer libraryService.Close()
+	runtime := appsettings.Runtime{
+		LibraryDir: *libraryDir, LibrarySource: settingSource(visited["library"], resolvedConfig),
+		WebAddr: *webAddr, WebAddrSource: settingSource(visited["web-addr"], resolvedConfig),
+		KindleAddr: *kindleAddr, KindleSource: settingSource(visited["kindle-addr"], resolvedConfig),
+		ConfigPath: resolvedConfig,
+	}
+	settingsService := appsettings.New(storage, baseCfg, runtime)
+	if err := settingsService.Initialize(context.Background()); err != nil {
+		return err
+	}
 	taskService := task.NewService(storage)
-	generationService := generation.NewService(libraryService, taskService, baseCfg)
+	generationService := generation.NewService(libraryService, taskService, baseCfg, settingsService)
 	generationExecutor := generation.NewExecutor(libraryService)
 	runner := task.NewRunner(taskService, map[task.Type]task.Executor{
 		task.GenerateEPUB: generationExecutor,
@@ -73,6 +85,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		Library:    libraryService,
 		Generation: generationService,
 		Tasks:      taskService,
+		Settings:   settingsService,
 	}
 	srv := server.Server{
 		Config: server.Config{
@@ -85,4 +98,14 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		Stdout:  stdout,
 	}
 	return srv.Run()
+}
+
+func settingSource(cli bool, configPath string) string {
+	if cli {
+		return "CLI"
+	}
+	if configPath != "" {
+		return "config file"
+	}
+	return "code default"
 }
