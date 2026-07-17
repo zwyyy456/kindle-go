@@ -137,3 +137,22 @@ func outputFileName(inputName, format string, now time.Time) string {
 	suffix := now.Format("20060102-150405")
 	return safeFileName(base + "-" + suffix + "." + strings.ToLower(format))
 }
+
+func safeFileName(name string) string {
+	name = strings.TrimSpace(filepath.Base(name))
+	if name == "" || name == "." {
+		return "book"
+	}
+	var value strings.Builder
+	for _, r := range name {
+		if r < 32 || r == '/' || r == '\\' || r == 0 {
+			value.WriteRune('_')
+		} else {
+			value.WriteRune(r)
+		}
+	}
+	if clean := strings.TrimSpace(value.String()); clean != "" {
+		return clean
+	}
+	return "book"
+}

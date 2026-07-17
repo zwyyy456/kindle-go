@@ -6,6 +6,7 @@ import (
 	"io"
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
+	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/server"
 )
 
@@ -52,13 +53,13 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		*libraryDir = baseCfg.Server.LibraryDir
 	}
 
-	library, err := server.NewLibrary(*libraryDir)
+	libraryService, err := library.Open(*libraryDir)
 	if err != nil {
 		return err
 	}
-	defer library.Close()
+	defer libraryService.Close()
 	handler := server.Handler{
-		Library:    library,
+		Library:    libraryService,
 		BaseConfig: baseCfg,
 	}
 	srv := server.Server{

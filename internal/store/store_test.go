@@ -200,6 +200,25 @@ func TestOpenReconcilesPendingFiles(t *testing.T) {
 	}
 }
 
+func TestOpenRemovesAbandonedIncomingFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "incoming"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	part := filepath.Join(root, "incoming", "abandoned.part")
+	if err := os.WriteFile(part, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := os.Stat(part); !os.IsNotExist(err) {
+		t.Fatalf("abandoned incoming file still exists: %v", err)
+	}
+}
+
 func TestResolveRelRejectsEscapes(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {

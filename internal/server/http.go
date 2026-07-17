@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -11,19 +12,21 @@ import (
 	"time"
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
+	"github.com/flashdict/kindle2flashdict/internal/library"
 )
 
 const recentWindow = 24 * time.Hour
 
 type Handler struct {
-	Library    *Library
+	Library    *library.Service
 	BaseConfig txtconfig.Config
 }
 
 func (h Handler) WebMux() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", h.handleWebIndex)
-	mux.HandleFunc("/upload", h.handleUpload)
+	mux.HandleFunc("/", h.handleWebRoot)
+	mux.HandleFunc("/books", h.handleBooks)
+	mux.HandleFunc("/books/", h.handleBookRoute)
 	mux.HandleFunc("/convert", h.handleConvert)
 	mux.HandleFunc("/download/", h.handleDownload)
 	return mux
@@ -37,8 +40,8 @@ func (h Handler) KindleMux() http.Handler {
 }
 
 func (h Handler) handleWebIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	records := h.recordsFor(r)
@@ -47,9 +50,53 @@ func (h Handler) handleWebIndex(w http.ResponseWriter, r *http.Request) {
 		ShowAll: r.URL.Query().Get("all") == "1",
 		Message: r.URL.Query().Get("message"),
 	}
+	if token := r.URL.Query().Get("duplicate"); token != "" {
+		if pending, ok := h.Library.PendingDuplicate(token); ok {
+			data.Duplicate = duplicateView{Token: token, Filename: pending.Filename, Existing: h.recordViews(pending.Existing, false)}
+		} else {
+			data.Message = "Duplicate confirmation expired; import the file again."
+		}
+	}
 	if err := webTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (h Handler) handleWebRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/books", http.StatusSeeOther)
+}
+
+func (h Handler) handleBooks(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.handleWebIndex(w, r)
+	case http.MethodPost:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h Handler) handleBookRoute(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/books/")
+	if path == "import" {
+		h.handleImport(w, r)
+		return
+	}
+	if strings.HasPrefix(path, "import/") && strings.HasSuffix(path, "/confirm") {
+		token := strings.TrimSuffix(strings.TrimPrefix(path, "import/"), "/confirm")
+		h.handleImportConfirm(w, r, token)
+		return
+	}
+	if r.Method == http.MethodGet && path != "" && !strings.Contains(path, "/") {
+		h.handleBookDetail(w, r, path)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
@@ -67,26 +114,84 @@ func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
+func (h Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, library.MaxEPUBBytes+(1<<20))
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "upload_too_large: request exceeds the 64 MiB EPUB limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "missing upload file", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
-	if _, err := h.Library.AddUpload(header.Filename, file, time.Now()); err != nil {
+	result, err := h.Library.Import(r.Context(), library.ImportRequest{Filename: header.Filename, Reader: file, Now: time.Now()})
+	if err != nil {
+		code := library.ErrorCode(err)
+		status := http.StatusInternalServerError
+		if code != "" {
+			status = http.StatusBadRequest
+		}
+		if code == "upload_too_large" {
+			status = http.StatusRequestEntityTooLarge
+		}
+		message := err.Error()
+		if code != "" {
+			message = code + ": " + message
+		}
+		http.Error(w, message, status)
+		return
+	}
+	if result.Duplicate {
+		http.Redirect(w, r, "/books?duplicate="+url.QueryEscape(result.DuplicateToken), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/books/"+result.Book.ID+"?message=imported", http.StatusSeeOther)
+}
+
+func (h Handler) handleImportConfirm(w http.ResponseWriter, r *http.Request, token string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	book, err := h.Library.ConfirmImport(r.Context(), token, r.Form.Get("action"))
+	if err != nil {
+		http.Redirect(w, r, "/books?message="+urlMessage(err.Error()), http.StatusSeeOther)
+		return
+	}
+	if book.ID == "" {
+		http.Redirect(w, r, "/books?message=import+canceled", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/books/"+book.ID, http.StatusSeeOther)
+}
+
+func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id string) {
+	book, ok, err := h.Library.GetBook(r.Context(), id)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/?message=uploaded", http.StatusSeeOther)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/books?message="+urlMessage("opened "+book.DisplayName), http.StatusSeeOther)
 }
 
 func (h Handler) handleConvert(w http.ResponseWriter, r *http.Request) {
@@ -99,42 +204,42 @@ func (h Handler) handleConvert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts := convertOptionsFromForm(r.Form.Get)
-	record, ok := h.Library.Record(opts.RecordID)
-	if !ok {
-		http.Redirect(w, r, "/?message="+urlMessage("convert failed: record not found"), http.StatusSeeOther)
+	record, ok, err := h.Library.GetBook(r.Context(), opts.RecordID)
+	if err != nil || !ok {
+		http.Redirect(w, r, "/books?message="+urlMessage("convert failed: record not found"), http.StatusSeeOther)
 		return
 	}
-	inputPath, inputFile, err := h.Library.OriginalPath(record)
+	inputPath, inputFile, err := h.Library.ResolveFile(r.Context(), record.ID, "original")
 	if err != nil {
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	format := outputFormat(opts.Format)
 	now := time.Now()
-	outputName := outputFileName(inputFile.Name, format, now)
-	outputPath, relPath, err := h.Library.ConvertedPath(record.ID, outputName)
+	outputName := outputFileName(inputFile.DisplayName, format, now)
+	outputPath, relPath, err := h.Library.ArtifactPath(outputName, record.ID)
 	if err != nil {
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	if err := convertFile(r.Context(), inputPath, outputPath, inputFile.Format, h.BaseConfig, opts); err != nil {
 		_ = os.Remove(outputPath)
-		_ = h.Library.SetError(record.ID, err)
+		_ = h.Library.SetLegacyError(r.Context(), record.ID, err)
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	info, err := os.Stat(outputPath)
 	if err != nil {
-		_ = h.Library.SetError(record.ID, err)
+		_ = h.Library.SetLegacyError(r.Context(), record.ID, err)
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
-	if err := h.Library.AddConverted(record.ID, outputName, relPath, info.Size(), now); err != nil {
+	if err := h.Library.AddArtifact(r.Context(), record.ID, outputName, relPath, info.Size(), now); err != nil {
 		_ = os.Remove(outputPath)
 		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/?message=converted", http.StatusSeeOther)
+	http.Redirect(w, r, "/books?message=converted", http.StatusSeeOther)
 }
 
 func (h Handler) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -143,37 +248,44 @@ func (h Handler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	path, file, err := h.Library.ResolveFile(recordID, kind)
+	path, file, err := h.Library.ResolveFile(r.Context(), recordID, kind)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", file.Name))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", file.DisplayName))
 	http.ServeFile(w, r, path)
 }
 
-func (h Handler) recordsFor(r *http.Request) []Record {
+func (h Handler) recordsFor(r *http.Request) []library.Book {
+	var records []library.Book
+	var err error
 	if r.URL.Query().Get("all") == "1" {
-		return h.Library.All()
+		records, err = h.Library.AllBooks(r.Context())
+	} else {
+		records, err = h.Library.RecentBooks(r.Context(), time.Now().Add(-recentWindow))
 	}
-	return h.Library.Recent(time.Now(), recentWindow)
+	if err != nil {
+		return nil
+	}
+	return records
 }
 
-func (h Handler) recordViews(records []Record, kindle bool) []recordView {
+func (h Handler) recordViews(records []library.Book, kindle bool) []recordView {
 	views := make([]recordView, 0, len(records))
 	for _, record := range records {
 		view := recordView{
 			ID:           record.ID,
-			OriginalName: record.OriginalName,
-			UploadedAt:   record.UploadedAt.Format("2006-01-02 15:04"),
-			LastError:    record.LastError,
+			OriginalName: record.DisplayName,
+			UploadedAt:   record.ImportedAt.Format("2006-01-02 15:04"),
+			LastError:    record.LegacyLastError,
 		}
 		view.Files = displayFileViews(record, kindle)
 		view.InputFormat = strings.ToLower(record.Original.Format)
 		view.Convertible = !kindle && (view.InputFormat == "txt" || view.InputFormat == "epub")
-		view.TitleDefault = strings.TrimSuffix(record.Original.Name, filepath.Ext(record.Original.Name))
+		view.TitleDefault = strings.TrimSuffix(record.Original.DisplayName, filepath.Ext(record.Original.DisplayName))
 		if view.TitleDefault == "" {
-			view.TitleDefault = strings.TrimSuffix(record.OriginalName, filepath.Ext(record.OriginalName))
+			view.TitleDefault = strings.TrimSuffix(record.DisplayName, filepath.Ext(record.DisplayName))
 		}
 		if len(view.Files) > 0 || !kindle {
 			views = append(views, view)
@@ -196,33 +308,33 @@ func parseDownloadPath(path string) (recordID, kind string, ok bool) {
 	}
 }
 
-func displayFileViews(record Record, kindle bool) []fileView {
+func displayFileViews(record library.Book, kindle bool) []fileView {
 	original := record.Original
-	output := record.Output
+	output := record.LatestArtifact
 	if kindle {
-		if output.RelPath != "" && kindleFormat(output.Format) {
+		if output.ID != "" && kindleFormat(output.Format) {
 			return []fileView{newFileView(record.ID, "output", output)}
 		}
-		if original.RelPath != "" && kindleFormat(original.Format) {
+		if original.ID != "" && kindleFormat(original.Format) {
 			return []fileView{newFileView(record.ID, "original", original)}
 		}
 		return nil
 	}
 
 	var files []fileView
-	if original.RelPath != "" {
+	if original.ID != "" {
 		files = append(files, newFileView(record.ID, "original", original))
 	}
-	if output.RelPath != "" {
+	if output.ID != "" {
 		files = append(files, newFileView(record.ID, "output", output))
 	}
 	return files
 }
 
-func newFileView(recordID, kind string, file FileEntry) fileView {
+func newFileView(recordID, kind string, file library.File) fileView {
 	return fileView{
 		Kind:   kind,
-		Name:   file.Name,
+		Name:   file.DisplayName,
 		Format: strings.ToUpper(file.Format),
 		Size:   humanSize(file.Size),
 		URL:    downloadURL(recordID, kind),
@@ -260,9 +372,16 @@ func urlMessage(message string) string {
 }
 
 type webPageData struct {
-	Records []recordView
-	ShowAll bool
-	Message string
+	Records   []recordView
+	ShowAll   bool
+	Message   string
+	Duplicate duplicateView
+}
+
+type duplicateView struct {
+	Token    string
+	Filename string
+	Existing []recordView
 }
 
 type kindlePageData struct {
@@ -314,14 +433,28 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
 
   <fieldset>
     <legend>Upload</legend>
-    <form method="post" action="/upload" enctype="multipart/form-data">
-      <input type="file" name="file" required>
-      <button type="submit">Upload</button>
+    <form method="post" action="/books/import" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".txt,.epub" required>
+      <button type="submit">Import</button>
     </form>
+    <p class="muted">TXT up to 32 MiB; EPUB up to 64 MiB and 512 MiB expanded.</p>
   </fieldset>
 
+  {{if .Duplicate.Token}}
+  <fieldset>
+    <legend>Duplicate source</legend>
+    <p><strong>{{.Duplicate.Filename}}</strong> has the same content as an existing book.</p>
+    {{range .Duplicate.Existing}}<p>{{.OriginalName}} — {{.UploadedAt}}</p>{{end}}
+    <form method="post" action="/books/import/{{.Duplicate.Token}}/confirm">
+      <button name="action" value="open" type="submit">Open existing book</button>
+      <button name="action" value="import" type="submit">Import as a new book</button>
+      <button name="action" value="cancel" type="submit">Cancel</button>
+    </form>
+  </fieldset>
+  {{end}}
+
   <p>
-    {{if .ShowAll}}<a href="/">Show recent uploads</a>{{else}}<a href="/?all=1">Show all history</a>{{end}}
+    {{if .ShowAll}}<a href="/books">Show recent uploads</a>{{else}}<a href="/books?all=1">Show all history</a>{{end}}
   </p>
 
   {{range .Records}}

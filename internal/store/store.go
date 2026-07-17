@@ -84,6 +84,10 @@ func Open(root string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.cleanupIncoming(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -122,80 +126,15 @@ func (s *Store) ResolveRel(relPath string) (string, error) {
 }
 
 func (s *Store) CreateOriginal(ctx context.Context, displayName, fileName, format string, reader io.Reader, now time.Time) (Book, error) {
-	if now.IsZero() {
-		now = time.Now()
-	}
-	bookID, err := NewID()
+	incoming, err := s.StageIncoming(reader)
 	if err != nil {
 		return Book{}, err
 	}
-	fileID, err := NewID()
+	book, err := s.CommitIncomingOriginal(ctx, incoming, displayName, fileName, format, now)
 	if err != nil {
-		return Book{}, err
+		_ = s.DiscardIncoming(incoming)
 	}
-	incomingDir := filepath.Join(s.root, "incoming")
-	if err := os.MkdirAll(incomingDir, 0o755); err != nil {
-		return Book{}, err
-	}
-	tmpPath := filepath.Join(incomingDir, fileID+".part")
-	out, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return Book{}, err
-	}
-	hash := sha256.New()
-	size, copyErr := io.Copy(io.MultiWriter(out, hash), reader)
-	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil {
-		_ = os.Remove(tmpPath)
-		if copyErr != nil {
-			return Book{}, copyErr
-		}
-		return Book{}, closeErr
-	}
-
-	relPath := filepath.ToSlash(filepath.Join("originals", bookID, fileID+"."+format))
-	finalPath, err := s.ResolveRel(relPath)
-	if err != nil {
-		_ = os.Remove(tmpPath)
-		return Book{}, err
-	}
-	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
-		_ = os.Remove(tmpPath)
-		return Book{}, err
-	}
-	timestamp := formatTime(now)
-	digest := hex.EncodeToString(hash.Sum(nil))
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		_ = os.Remove(tmpPath)
-		return Book{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO books(id, display_name, source_format, state, imported_at) VALUES(?, ?, ?, 'active', ?)`, bookID, displayName, format, timestamp); err != nil {
-		tx.Rollback()
-		_ = os.Remove(tmpPath)
-		return Book{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO files(id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, created_at) VALUES(?, ?, 'original', 'pending', ?, ?, ?, ?, ?, ?)`, fileID, bookID, format, fileName, relPath, digest, size, timestamp); err != nil {
-		tx.Rollback()
-		_ = os.Remove(tmpPath)
-		return Book{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		_ = os.Remove(tmpPath)
-		return Book{}, err
-	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, bookID)
-		_ = os.Remove(tmpPath)
-		return Book{}, err
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE files SET state = 'ready' WHERE id = ? AND state = 'pending'`, fileID); err != nil {
-		return Book{}, err
-	}
-	return Book{
-		ID: bookID, DisplayName: displayName, SourceFormat: format, ImportedAt: now,
-		Original: File{ID: fileID, BookID: bookID, Role: "original", State: "ready", Format: format, DisplayName: fileName, RelPath: relPath, SHA256: digest, Size: size, CreatedAt: now},
-	}, nil
+	return book, err
 }
 
 func (s *Store) AddArtifact(ctx context.Context, bookID, name, format, relPath string, size int64, now time.Time) error {
@@ -378,6 +317,25 @@ func (s *Store) reconcilePendingFiles(ctx context.Context) error {
 			}
 		} else if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, file.id); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) cleanupIncoming() error {
+	directory := filepath.Join(s.root, "incoming")
+	entries, err := os.ReadDir(directory)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".part") {
+			if err := os.Remove(filepath.Join(directory, entry.Name())); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 		}
 	}
 	return nil
