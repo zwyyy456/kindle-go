@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -97,37 +95,6 @@ func (s *Service) ResolveFile(ctx context.Context, bookID, kind string) (string,
 	}
 	path, err := s.store.ResolveRel(value.RelPath)
 	return path, fileFromStore(value), err
-}
-
-// Transitional generation helpers are removed when task executors own artifact commits.
-func (s *Service) ArtifactPath(outputName string, bookID string) (string, string, error) {
-	fileID, err := store.NewID()
-	if err != nil {
-		return "", "", err
-	}
-	ext := strings.ToLower(filepath.Ext(outputName))
-	relPath := filepath.ToSlash(filepath.Join("artifacts", bookID, fileID+ext))
-	path, err := s.store.ResolveRel(relPath)
-	if err != nil {
-		return "", "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", "", err
-	}
-	return path, relPath, nil
-}
-
-func (s *Service) AddArtifact(ctx context.Context, bookID, name, relPath string, size int64, now time.Time) error {
-	format := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
-	return s.store.AddArtifact(ctx, bookID, name, format, relPath, size, now)
-}
-
-func (s *Service) SetLegacyError(ctx context.Context, bookID string, value error) error {
-	message := ""
-	if value != nil {
-		message = value.Error()
-	}
-	return s.store.SetLegacyError(ctx, bookID, message)
 }
 
 func booksFromStore(values []store.Book) []Book {

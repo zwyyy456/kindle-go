@@ -20,6 +20,7 @@ type Config struct {
 type Server struct {
 	Config  Config
 	Handler Handler
+	Runner  interface{ Run(context.Context) error }
 	Stdout  io.Writer
 }
 
@@ -28,6 +29,13 @@ func (s Server) Run() error {
 }
 
 func (s Server) RunContext(ctx context.Context) error {
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	if preparer, ok := s.Runner.(interface{ Prepare(context.Context) error }); ok {
+		if err := preparer.Prepare(runCtx); err != nil {
+			return err
+		}
+	}
 	webAddr := s.Config.WebAddr
 	if webAddr == "" {
 		webAddr = ":8787"
@@ -42,23 +50,44 @@ func (s Server) RunContext(ctx context.Context) error {
 
 	webServer := &http.Server{Addr: webAddr, Handler: s.Handler.WebMux()}
 	kindleServer := &http.Server{Addr: kindleAddr, Handler: s.Handler.KindleMux()}
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		errCh <- webServer.ListenAndServe()
 	}()
 	go func() {
 		errCh <- kindleServer.ListenAndServe()
 	}()
+	runnerDone := make(chan error, 1)
+	if s.Runner != nil {
+		go func() {
+			err := s.Runner.Run(runCtx)
+			runnerDone <- err
+			errCh <- err
+		}()
+	}
 	var runErr error
 	select {
 	case <-ctx.Done():
 		runErr = ctx.Err()
 	case runErr = <-errCh:
 	}
+	cancelRun()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = webServer.Shutdown(shutdownCtx)
 	_ = kindleServer.Shutdown(shutdownCtx)
+	if s.Runner != nil {
+		select {
+		case runnerErr := <-runnerDone:
+			if runErr == nil && runnerErr != nil {
+				runErr = runnerErr
+			}
+		case <-shutdownCtx.Done():
+			if runErr == nil {
+				runErr = fmt.Errorf("task runner did not stop before shutdown timeout")
+			}
+		}
+	}
 	if errors.Is(runErr, http.ErrServerClosed) {
 		return nil
 	}

@@ -6,8 +6,11 @@ import (
 	"io"
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
+	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/server"
+	"github.com/flashdict/kindle2flashdict/internal/store"
+	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
 func Run(args []string, stdout, stderr io.Writer) error {
@@ -53,14 +56,22 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		*libraryDir = baseCfg.Server.LibraryDir
 	}
 
-	libraryService, err := library.Open(*libraryDir)
+	storage, err := store.OpenForWorker(*libraryDir)
 	if err != nil {
 		return err
 	}
+	libraryService := library.New(storage)
 	defer libraryService.Close()
+	taskService := task.NewService(storage)
+	generationService := generation.NewService(libraryService, taskService, baseCfg)
+	generationExecutor := generation.NewExecutor(libraryService)
+	runner := task.NewRunner(taskService, map[task.Type]task.Executor{
+		task.GenerateEPUB: generationExecutor,
+		task.GenerateAZW3: generationExecutor,
+	})
 	handler := server.Handler{
 		Library:    libraryService,
-		BaseConfig: baseCfg,
+		Generation: generationService,
 	}
 	srv := server.Server{
 		Config: server.Config{
@@ -69,6 +80,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 			LibraryDir: *libraryDir,
 		},
 		Handler: handler,
+		Runner:  runner,
 		Stdout:  stdout,
 	}
 	return srv.Run()

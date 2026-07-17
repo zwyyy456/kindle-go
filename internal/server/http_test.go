@@ -12,12 +12,14 @@ import (
 	"testing"
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
+	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/store"
+	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
 func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
-	handler, service := newHTTPTestHandler(t)
+	handler, service, _ := newHTTPTestHandler(t)
 	request := multipartRequest(t, "/books/import", "book.txt", "正文")
 	response := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(response, request)
@@ -41,7 +43,7 @@ func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 }
 
 func TestWebDuplicateConfirmationIsOneTime(t *testing.T) {
-	handler, service := newHTTPTestHandler(t)
+	handler, service, _ := newHTTPTestHandler(t)
 	for index := 0; index < 2; index++ {
 		response := httptest.NewRecorder()
 		handler.WebMux().ServeHTTP(response, multipartRequest(t, "/books/import", "book.txt", "same"))
@@ -82,7 +84,7 @@ func TestWebDuplicateConfirmationIsOneTime(t *testing.T) {
 }
 
 func TestWebImportMapsHardLimitToRequestEntityTooLarge(t *testing.T) {
-	handler, _ := newHTTPTestHandler(t)
+	handler, _, _ := newHTTPTestHandler(t)
 	response := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(response, multipartRequest(t, "/books/import", "book.txt", strings.Repeat("x", int(library.MaxTXTBytes+1))))
 	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), "upload_too_large") {
@@ -90,7 +92,32 @@ func TestWebImportMapsHardLimitToRequestEntityTooLarge(t *testing.T) {
 	}
 }
 
-func newHTTPTestHandler(t *testing.T) (Handler, *library.Service) {
+func TestWebGenerateCreatesTaskAndLegacyConvertRouteIsGone(t *testing.T) {
+	handler, service, taskService := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"format": {"epub"}, "title": {"任务标题"}}
+	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/generate", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "queued") {
+		t.Fatalf("generate response = %d, %q", response.Code, response.Header().Get("Location"))
+	}
+	tasks, err := taskService.List(context.Background(), result.Book.ID)
+	if err != nil || len(tasks) != 1 || tasks[0].Status != task.Queued || tasks[0].Type != task.GenerateEPUB {
+		t.Fatalf("tasks = %#v, %v", tasks, err)
+	}
+	legacy := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(legacy, httptest.NewRequest(http.MethodPost, "/convert", strings.NewReader(form.Encode())))
+	if legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy convert status = %d", legacy.Code)
+	}
+}
+
+func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service) {
 	t.Helper()
 	storage, err := store.Open(t.TempDir())
 	if err != nil {
@@ -98,7 +125,9 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service) {
 	}
 	service := library.New(storage)
 	t.Cleanup(func() { _ = service.Close() })
-	return Handler{Library: service, BaseConfig: txtconfig.Defaults()}, service
+	taskService := task.NewService(storage)
+	generationService := generation.NewService(service, taskService, txtconfig.Defaults())
+	return Handler{Library: service, Generation: generationService}, service, taskService
 }
 
 func multipartRequest(t *testing.T, target, name, content string) *http.Request {

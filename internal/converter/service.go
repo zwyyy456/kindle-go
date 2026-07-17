@@ -109,7 +109,10 @@ func validate(req Request) error {
 	if !req.Preview && strings.TrimSpace(req.OutputPath) == "" {
 		return fmt.Errorf("output path is required")
 	}
-	if !req.Preview && !strings.EqualFold(filepath.Ext(req.OutputPath), "."+string(req.OutputFormat)) {
+	extension := strings.ToLower(filepath.Ext(req.OutputPath))
+	wantExtension := "." + string(req.OutputFormat)
+	stagedExtension := wantExtension + ".part"
+	if !req.Preview && extension != wantExtension && !strings.HasSuffix(strings.ToLower(req.OutputPath), stagedExtension) {
 		return fmt.Errorf("%s output must use .%s extension", strings.ToUpper(string(req.OutputFormat)), req.OutputFormat)
 	}
 	return nil

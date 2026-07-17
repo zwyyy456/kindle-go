@@ -19,6 +19,17 @@ type IncomingFile struct {
 	Size    int64
 }
 
+type ArtifactCommit struct {
+	BookID         string
+	SourceFileID   string
+	TaskID         string
+	Format         string
+	DisplayName    string
+	WorkRelPath    string
+	ParametersJSON string
+	CreatedAt      time.Time
+}
+
 func (s *Store) StageIncoming(reader io.Reader) (IncomingFile, error) {
 	id, err := NewID()
 	if err != nil {
@@ -134,4 +145,89 @@ func (s *Store) CommitIncomingOriginal(ctx context.Context, incoming IncomingFil
 
 func (s *Store) OriginalBooksBySHA(ctx context.Context, digest string) ([]Book, error) {
 	return s.listBooks(ctx, `WHERE b.state = 'active' AND o.sha256 = ? ORDER BY b.imported_at DESC, b.id DESC`, digest)
+}
+
+func (s *Store) CommitArtifact(ctx context.Context, commit ArtifactCommit) (File, error) {
+	workPath, err := s.ResolveRel(commit.WorkRelPath)
+	if err != nil {
+		return File{}, err
+	}
+	cleanWork := filepath.ToSlash(filepath.Clean(commit.WorkRelPath))
+	if !strings.HasPrefix(cleanWork, "work/"+commit.TaskID+"/") {
+		return File{}, fmt.Errorf("artifact work path does not belong to task %q", commit.TaskID)
+	}
+	digest, size, err := hashFile(workPath)
+	if err != nil {
+		return File{}, err
+	}
+	fileID, err := NewID()
+	if err != nil {
+		return File{}, err
+	}
+	format := strings.ToLower(strings.TrimSpace(commit.Format))
+	if format == "" {
+		return File{}, fmt.Errorf("artifact format is required")
+	}
+	relPath := filepath.ToSlash(filepath.Join("artifacts", commit.BookID, fileID+"."+format))
+	finalPath, err := s.ResolveRel(relPath)
+	if err != nil {
+		return File{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
+		return File{}, err
+	}
+	createdAt := commit.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	parameters := strings.TrimSpace(commit.ParametersJSON)
+	if parameters == "" {
+		parameters = "{}"
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO files(id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, source_file_id, task_id, parameters_json, created_at)
+VALUES(?, ?, 'artifact', 'pending', ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)
+`, fileID, commit.BookID, format, commit.DisplayName, relPath, digest, size, commit.SourceFileID, commit.TaskID, parameters, formatTime(createdAt))
+	if err != nil {
+		return File{}, err
+	}
+	if err := os.Rename(workPath, finalPath); err != nil {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
+		return File{}, err
+	}
+	finalizeTx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		_ = os.Remove(finalPath)
+		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
+		return File{}, err
+	}
+	result, err := finalizeTx.ExecContext(context.Background(), `UPDATE tasks SET status = 'completed', error_code = '', error_message = '', finished_at = ?, stage = 'completed' WHERE id = ? AND status = 'running'`, formatTime(time.Now()), commit.TaskID)
+	if err != nil {
+		_ = finalizeTx.Rollback()
+		_ = os.Remove(finalPath)
+		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
+		return File{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		_ = finalizeTx.Rollback()
+		_ = os.Remove(finalPath)
+		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
+		if err != nil {
+			return File{}, err
+		}
+		return File{}, fmt.Errorf("task %q was canceled before artifact commit", commit.TaskID)
+	}
+	if _, err := finalizeTx.ExecContext(context.Background(), `UPDATE files SET state = 'ready' WHERE id = ? AND state = 'pending'`, fileID); err != nil {
+		_ = finalizeTx.Rollback()
+		_ = os.Remove(finalPath)
+		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
+		return File{}, err
+	}
+	if err := finalizeTx.Commit(); err != nil {
+		_ = os.Remove(finalPath)
+		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
+		return File{}, err
+	}
+	return File{ID: fileID, BookID: commit.BookID, Role: "artifact", State: "ready", Format: format, DisplayName: commit.DisplayName, RelPath: relPath, SHA256: digest, Size: size, CreatedAt: createdAt}, nil
 }

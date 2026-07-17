@@ -48,6 +48,24 @@ type Book struct {
 }
 
 func Open(root string) (*Store, error) {
+	s, err := open(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Initialize(context.Background()); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// OpenForWorker opens the schema but defers library reconciliation until the
+// task runner has acquired the runtime lock.
+func OpenForWorker(root string) (*Store, error) {
+	return open(root)
+}
+
+func open(root string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		root = "kindle-go-library"
 	}
@@ -76,19 +94,17 @@ func Open(root string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	return s, nil
+}
+
+func (s *Store) Initialize(ctx context.Context) error {
 	if err := s.migrateLegacyIndex(ctx); err != nil {
-		db.Close()
-		return nil, err
+		return err
 	}
 	if err := s.reconcilePendingFiles(ctx); err != nil {
-		db.Close()
-		return nil, err
+		return err
 	}
-	if err := s.cleanupIncoming(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return s, nil
+	return s.cleanupIncoming()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -135,47 +151,6 @@ func (s *Store) CreateOriginal(ctx context.Context, displayName, fileName, forma
 		_ = s.DiscardIncoming(incoming)
 	}
 	return book, err
-}
-
-func (s *Store) AddArtifact(ctx context.Context, bookID, name, format, relPath string, size int64, now time.Time) error {
-	if now.IsZero() {
-		now = time.Now()
-	}
-	absPath, err := s.ResolveRel(relPath)
-	if err != nil {
-		return err
-	}
-	digest, actualSize, err := hashFile(absPath)
-	if err != nil {
-		return err
-	}
-	if size != actualSize {
-		return fmt.Errorf("artifact size changed: got %d, expected %d", actualSize, size)
-	}
-	fileID, err := NewID()
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO files(id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, created_at) VALUES(?, ?, 'artifact', 'ready', ?, ?, ?, ?, ?, ?)`, fileID, bookID, format, name, filepath.ToSlash(relPath), digest, size, formatTime(now))
-	if err == nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE books SET legacy_last_error = '' WHERE id = ?`, bookID)
-	}
-	return err
-}
-
-func (s *Store) SetLegacyError(ctx context.Context, bookID string, value string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE books SET legacy_last_error = ? WHERE id = ?`, value, bookID)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return fmt.Errorf("book %q not found", bookID)
-	}
-	return nil
 }
 
 func (s *Store) Book(ctx context.Context, id string) (Book, bool, error) {
@@ -297,7 +272,7 @@ func (s *Store) reconcilePendingFiles(ctx context.Context) error {
 	}
 	for _, file := range pending {
 		path, err := s.ResolveRel(file.relPath)
-		if err == nil {
+		if file.role == "original" && err == nil {
 			var digest string
 			var size int64
 			digest, size, err = hashFile(path)

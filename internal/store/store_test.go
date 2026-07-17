@@ -200,6 +200,52 @@ func TestOpenReconcilesPendingFiles(t *testing.T) {
 	}
 }
 
+func TestOpenRemovesPendingArtifactFromInterruptedCommit(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := store.CreateOriginal(context.Background(), "book.txt", "book.txt", "txt", strings.NewReader("source"), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(context.Background(), CreateTaskParams{BookID: book.ID, Type: "generate_epub", InputFileID: book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "artifacts", book.ID, "pending.epub")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("partial artifact")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest, _, err := hashFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO files(id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, source_file_id, task_id, created_at) VALUES('pending-artifact', ?, 'artifact', 'pending', 'epub', 'pending.epub', ?, ?, ?, ?, ?, ?)`, book.ID, filepath.ToSlash(filepath.Join("artifacts", book.ID, "pending.epub")), digest, len(data), book.Original.ID, task.ID, formatTime(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pending artifact remains after restart: %v", err)
+	}
+	var count int
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM files WHERE id = 'pending-artifact'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("pending artifact row count = %d, %v", count, err)
+	}
+}
+
 func TestOpenRemovesAbandonedIncomingFiles(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "incoming"), 0o755); err != nil {
@@ -216,6 +262,31 @@ func TestOpenRemovesAbandonedIncomingFiles(t *testing.T) {
 	defer store.Close()
 	if _, err := os.Stat(part); !os.IsNotExist(err) {
 		t.Fatalf("abandoned incoming file still exists: %v", err)
+	}
+}
+
+func TestOpenForWorkerDefersCleanupUntilRuntimeInitialization(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "incoming"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	part := filepath.Join(root, "incoming", "pending-confirmation.part")
+	if err := os.WriteFile(part, []byte("pending"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenForWorker(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := os.Stat(part); err != nil {
+		t.Fatalf("worker open cleaned incoming before lock: %v", err)
+	}
+	if err := store.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(part); !os.IsNotExist(err) {
+		t.Fatalf("runtime initialization left incoming file: %v", err)
 	}
 }
 

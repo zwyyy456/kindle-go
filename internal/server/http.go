@@ -6,12 +6,12 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
+	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
 )
 
@@ -19,7 +19,7 @@ const recentWindow = 24 * time.Hour
 
 type Handler struct {
 	Library    *library.Service
-	BaseConfig txtconfig.Config
+	Generation *generation.Service
 }
 
 func (h Handler) WebMux() http.Handler {
@@ -27,7 +27,6 @@ func (h Handler) WebMux() http.Handler {
 	mux.HandleFunc("/", h.handleWebRoot)
 	mux.HandleFunc("/books", h.handleBooks)
 	mux.HandleFunc("/books/", h.handleBookRoute)
-	mux.HandleFunc("/convert", h.handleConvert)
 	mux.HandleFunc("/download/", h.handleDownload)
 	return mux
 }
@@ -95,6 +94,13 @@ func (h Handler) handleBookRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && path != "" && !strings.Contains(path, "/") {
 		h.handleBookDetail(w, r, path)
 		return
+	}
+	if r.Method == http.MethodPost && strings.HasSuffix(path, "/generate") {
+		bookID := strings.TrimSuffix(path, "/generate")
+		if bookID != "" && !strings.Contains(bookID, "/") {
+			h.handleGenerate(w, r, bookID)
+			return
+		}
 	}
 	http.NotFound(w, r)
 }
@@ -194,52 +200,43 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 	http.Redirect(w, r, "/books?message="+urlMessage("opened "+book.DisplayName), http.StatusSeeOther)
 }
 
-func (h Handler) handleConvert(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (h Handler) handleGenerate(w http.ResponseWriter, r *http.Request, bookID string) {
+	if h.Generation == nil {
+		http.Error(w, "generation service is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	opts := convertOptionsFromForm(r.Form.Get)
-	record, ok, err := h.Library.GetBook(r.Context(), opts.RecordID)
-	if err != nil || !ok {
-		http.Redirect(w, r, "/books?message="+urlMessage("convert failed: record not found"), http.StatusSeeOther)
-		return
+	formats := r.Form["format"]
+	if len(formats) == 0 {
+		formats = []string{"azw3"}
 	}
-	inputPath, inputFile, err := h.Library.ResolveFile(r.Context(), record.ID, "original")
+	_, err := h.Generation.Create(r.Context(), generation.CreateRequest{
+		BookID: bookID, Formats: formats,
+		Options: generation.Options{
+			Title: r.Form.Get("title"), Author: r.Form.Get("author"), Language: r.Form.Get("language"),
+			H1Regex: r.Form.Get("h1_regex"), H2Regex: r.Form.Get("h2_regex"),
+			SplitLevel: parseInt(r.Form.Get("split_level")), LineHeight: parseFloat(r.Form.Get("line_height")),
+			ParagraphSpacing: r.Form.Get("paragraph_spacing"), ParagraphIndent: r.Form.Get("paragraph_indent"), TextAlign: r.Form.Get("text_align"),
+		},
+	})
 	if err != nil {
-		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/books?message="+urlMessage("generate failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
-	format := outputFormat(opts.Format)
-	now := time.Now()
-	outputName := outputFileName(inputFile.DisplayName, format, now)
-	outputPath, relPath, err := h.Library.ArtifactPath(outputName, record.ID)
-	if err != nil {
-		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
-		return
-	}
-	if err := convertFile(r.Context(), inputPath, outputPath, inputFile.Format, h.BaseConfig, opts); err != nil {
-		_ = os.Remove(outputPath)
-		_ = h.Library.SetLegacyError(r.Context(), record.ID, err)
-		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
-		return
-	}
-	info, err := os.Stat(outputPath)
-	if err != nil {
-		_ = h.Library.SetLegacyError(r.Context(), record.ID, err)
-		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
-		return
-	}
-	if err := h.Library.AddArtifact(r.Context(), record.ID, outputName, relPath, info.Size(), now); err != nil {
-		_ = os.Remove(outputPath)
-		http.Redirect(w, r, "/?message="+urlMessage("convert failed: "+err.Error()), http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/books?message=converted", http.StatusSeeOther)
+	http.Redirect(w, r, "/books?message=task+queued", http.StatusSeeOther)
+}
+
+func parseInt(raw string) int {
+	value, _ := strconv.Atoi(strings.TrimSpace(raw))
+	return value
+}
+
+func parseFloat(raw string) float64 {
+	value, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	return value
 }
 
 func (h Handler) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -470,8 +467,7 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
     {{if .Convertible}}
     <details>
       <summary>Convert</summary>
-      <form method="post" action="/convert">
-        <input type="hidden" name="record_id" value="{{.ID}}">
+      <form method="post" action="/books/{{.ID}}/generate">
         <label>Format
           <select name="format">
             <option value="azw3">AZW3</option>
