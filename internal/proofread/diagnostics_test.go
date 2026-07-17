@@ -34,3 +34,18 @@ func TestDiagnoseDependenciesChecksRequiredCodexFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckCodexLoginUsesStatusWithoutModelInvocation(t *testing.T) {
+	var received CommandSpec
+	runner := runnerFunc(func(_ context.Context, spec CommandSpec) (CommandResult, error) {
+		received = spec
+		return CommandResult{Stdout: "Logged in using ChatGPT\n"}, nil
+	})
+	status, err := CheckCodexLogin(context.Background(), runner, "/codex")
+	if err != nil || status != "Logged in using ChatGPT" {
+		t.Fatalf("status = %q, %v", status, err)
+	}
+	if received.Path != "/codex" || strings.Join(received.Args, " ") != "login status" {
+		t.Fatalf("command = %#v", received)
+	}
+}

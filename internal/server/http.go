@@ -18,6 +18,7 @@ import (
 	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/proofread"
 	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
+	"github.com/flashdict/kindle2flashdict/internal/store"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
@@ -29,6 +30,7 @@ type Handler struct {
 	Tasks       *task.Service
 	Settings    *appsettings.Service
 	Diagnostics func(context.Context) proofread.DependencyDiagnostics
+	CheckCodex  func(context.Context) (string, error)
 	Proofreads  *proofread.Service
 }
 
@@ -43,6 +45,7 @@ func (h Handler) WebMux() http.Handler {
 	mux.HandleFunc("/tasks", h.handleTasks)
 	mux.HandleFunc("/tasks/", h.handleTaskRoute)
 	mux.HandleFunc("/settings", h.handleSettings)
+	mux.HandleFunc("/settings/check-codex", h.handleCheckCodex)
 	return mux
 }
 
@@ -548,11 +551,36 @@ func (h Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Values: values, Runtime: h.Settings.Runtime(), Diagnostics: diagnostics,
 		Message: r.URL.Query().Get("message"), DropRegex: strings.Join(values.TXT.DropRegex, "\n"),
 	}
+	if h.Library != nil {
+		data.System, err = h.Library.Diagnostics(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.SystemFree = humanSize(int64(data.System.FreeBytes))
+	}
 	replacements, _ := json.Marshal(values.TXT.Replace)
 	data.ReplaceJSON = string(replacements)
 	if err := settingsTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (h Handler) handleCheckCodex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	check := h.CheckCodex
+	if check == nil {
+		check = func(ctx context.Context) (string, error) { return proofread.CheckCodexLogin(ctx, nil, "") }
+	}
+	status, err := check(r.Context())
+	message := "Codex check passed: " + status
+	if err != nil {
+		message = "Codex check failed: " + err.Error()
+	}
+	http.Redirect(w, r, "/settings?message="+urlMessage(message), http.StatusSeeOther)
 }
 
 func settingsFromForm(r *http.Request) (appsettings.Values, error) {
@@ -883,6 +911,8 @@ type settingsPageData struct {
 	Message     string
 	DropRegex   string
 	ReplaceJSON string
+	System      store.Diagnostics
+	SystemFree  string
 }
 
 type tasksPageData struct {
@@ -1214,7 +1244,8 @@ label { display: block; margin: 8px 0; } input[type=text], input[type=number], t
 <label>Concurrency <input type="number" name="proofread_concurrency" min="1" max="8" value="{{.Values.Proofread.Concurrency}}" required></label>
 </fieldset>
 <button type="submit">Save global defaults</button></form>
-<fieldset><legend>Dependency diagnostics</legend><p>python3: {{if .Diagnostics.PythonPath}}{{.Diagnostics.PythonPath}} — {{.Diagnostics.PythonVersion}}{{else}}not found{{end}}</p><p>Codex CLI: {{if .Diagnostics.CodexPath}}{{.Diagnostics.CodexPath}} — {{.Diagnostics.CodexVersion}}{{else}}not found{{end}}</p><p>Required non-interactive flags: {{if .Diagnostics.CodexFlagsReady}}available{{else}}missing or unsupported{{end}}</p><p class="muted">Codex login/model availability is checked explicitly before proofreading; this page does not send book content.</p></fieldset>
+<fieldset><legend>Library diagnostics</legend><p>Database schema: v{{.System.SchemaVersion}} · journal: {{.System.JournalMode}}</p><p>Library writable: {{if .System.LibraryWritable}}yes{{else}}no{{end}} · free space: {{.SystemFree}}</p><p>Generation slot: {{.System.RunningGeneration}} running, {{.System.QueuedGeneration}} queued</p><p>Proofreading slot: {{.System.RunningProofread}} running, {{.System.QueuedProofread}} queued</p><p class="muted">Both slots select tasks from the same persistent FIFO sequence.</p></fieldset>
+<fieldset><legend>Dependency diagnostics</legend><p>python3: {{if .Diagnostics.PythonPath}}{{.Diagnostics.PythonPath}} — {{.Diagnostics.PythonVersion}}{{else}}not found{{end}}</p><p>Codex CLI: {{if .Diagnostics.CodexPath}}{{.Diagnostics.CodexPath}} — {{.Diagnostics.CodexVersion}}{{else}}not found{{end}}</p><p>Required non-interactive flags: {{if .Diagnostics.CodexFlagsReady}}available{{else}}missing or unsupported{{end}}</p><form method="post" action="/settings/check-codex"><button type="submit">Check Codex login</button></form><p class="muted">The explicit check runs <code>codex login status</code> and does not send book content or invoke a model.</p></fieldset>
 </body></html>`))
 
 var txtPreviewTemplate = template.Must(template.New("txt-preview").Parse(`<!doctype html>

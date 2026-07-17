@@ -12,13 +12,19 @@ The confirmed Web UI v1 product direction and functional requirements are docume
 [`docs/product-design.md`](docs/product-design.md). The sections below describe the functionality
 that is currently implemented.
 
-AI proofreading calls a locally installed and logged-in `codex` CLI. The app starts isolated
+AI proofreading calls a locally installed and logged-in `codex` CLI. It reuses the same session
+shown by `codex login status`; no separate API key is configured. The app starts isolated
 `codex exec` processes with structured JSON output for first review, independent verification,
 and EPUB image review; it does not call a separate model API or store an API key. Codex
 authentication is reused, while user/project instructions and hooks are ignored for these calls so
 they cannot change the proofreading protocol. `python3` runs the bundled deterministic TXT/EPUB
 workflow scripts. The Settings page reports whether both executables are available and holds the
 global model, batch-size, and concurrency defaults.
+
+Proofreading requires Python 3 and a recent Codex CLI with the non-interactive flags shown on the
+Settings page. The explicit “Check Codex login” button only runs `codex login status`; it does not
+invoke a model or send book content. Starting a proofreading task is the actual model-availability
+check.
 
 The Web UI v1 implementation order and milestone acceptance checks are documented in
 [`docs/development-plan.md`](docs/development-plan.md).
@@ -168,11 +174,39 @@ EPUB import saves a structured AZW3 compatibility report. EPUB/AZW3 generation r
 persistent background task queue, and every successful output and its parameter snapshot is kept.
 Failed or canceled tasks can be retried from the beginning.
 
+Import limits are 32 MiB for TXT and 64 MiB for EPUB. EPUB archives are additionally limited to
+512 MiB of declared expanded content. Files that fail EPUB compatibility analysis remain available
+for inspection and proofreading, but cannot generate AZW3. v1 does not repair an incompatible
+EPUB; fix it externally and import the corrected file as a new book.
+
+The database contains one persistent FIFO task sequence. At runtime one generation slot handles
+format and revision builds, while one proofreading slot handles a single book; both slots may run
+at the same time. A book may use 1–8 concurrent Codex subprocesses internally. There is no resume
+state: cancellation, failure, or process interruption exposes no partial result, and Retry creates
+a new task that starts every batch from the beginning.
+
+The proofreading workflow is:
+
+1. Start TXT or EPUB proofreading from the book page.
+2. Review candidates. Only matching high-confidence first and isolated reviews are marked for
+   automatic application; every accept, reject, or modified replacement is append-only history.
+3. Generate an immutable revision. If candidates remain unresolved, explicit confirmation keeps
+   those exact source locations unchanged.
+4. Download the revised TXT/EPUB, Markdown report, and JSONL audit. A revised EPUB receives its
+   own compatibility report. Any ready revision can be selected as a later EPUB/AZW3 input.
+
 The Settings page stores global TXT defaults, proofreading defaults, and the Kindle EPUB switch in
 the library database. Per-book form changes affect only that preview or generation and are not
 saved as book-level configuration.
+
+The Web UI and Kindle page intentionally have no authentication because v1 treats the local LAN as
+trusted. Do not bind or forward these ports to an untrusted or public network.
 
 The Kindle page is deliberately plain HTML. By default it lists the latest AZW3 for each book.
 When “Show latest EPUB” is enabled globally, the latest EPUB is shown alongside the AZW3 for
 KOReader and similar readers. Legacy MOBI/PDF originals remain downloadable after library
 migration.
+
+Before a release, run `tools/test.sh`. The remaining environment checks are manual: complete one
+real Codex TXT run, one real Codex EPUB run, and verify Chinese book browsing plus AZW3 download on
+the target Kindle. Optional Calibre validation remains opt-in as described in Testing.

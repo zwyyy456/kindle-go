@@ -371,8 +371,13 @@ func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
 	}
 	page := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/settings", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Global settings") || !strings.Contains(page.Body.String(), "Codex CLI") {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Global settings") || !strings.Contains(page.Body.String(), "Codex CLI") || !strings.Contains(page.Body.String(), "Database schema") || !strings.Contains(page.Body.String(), "same persistent FIFO") {
 		t.Fatalf("settings page = %d, %q", page.Code, page.Body.String())
+	}
+	check := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(check, httptest.NewRequest(http.MethodPost, "/settings/check-codex", nil))
+	if check.Code != http.StatusSeeOther || !strings.Contains(check.Header().Get("Location"), "Codex+check+passed") {
+		t.Fatalf("Codex check = %d, %q", check.Code, check.Header().Get("Location"))
 	}
 }
 
@@ -449,6 +454,7 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service,
 	proofreadService := proofread.NewService(storage, service, taskService, settingsService)
 	return Handler{
 		Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService, Proofreads: proofreadService,
+		CheckCodex: func(context.Context) (string, error) { return "Logged in for test", nil },
 		Diagnostics: func(context.Context) proofread.DependencyDiagnostics {
 			return proofread.DependencyDiagnostics{PythonPath: "/python3", PythonVersion: "Python test", CodexPath: "/codex", CodexVersion: "codex test"}
 		},

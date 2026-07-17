@@ -284,7 +284,7 @@ func (s *Service) Decide(ctx context.Context, candidateID string, request Decisi
 		markConflicts(views)
 		for _, view := range views {
 			if view.Candidate.ID == candidateID && len(view.ConflictIDs) != 0 {
-				return run, fmt.Errorf("candidate overlaps another applied candidate; reject the conflicting candidate first")
+				return run, fmt.Errorf("candidate_conflict: candidate overlaps another applied candidate; reject the conflicting candidate first")
 			}
 		}
 	}

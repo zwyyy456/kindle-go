@@ -410,6 +410,9 @@ func engineFailure(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
+	if commandNotFound(err) {
+		return &task.ExecutionError{Code: "python_not_found", Message: "python3 was not found", Err: err}
+	}
 	return &task.ExecutionError{Code: "proofread_engine_failed", Err: err}
 }
 

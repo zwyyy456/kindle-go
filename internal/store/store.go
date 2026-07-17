@@ -154,7 +154,10 @@ func (s *Store) Initialize(ctx context.Context) error {
 	if err := s.reconcileDeletingBooks(ctx); err != nil {
 		return err
 	}
-	return s.cleanupIncoming()
+	if err := s.cleanupIncoming(); err != nil {
+		return err
+	}
+	return s.cleanupWork()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -409,6 +412,26 @@ func (s *Store) cleanupIncoming() error {
 			if err := os.Remove(filepath.Join(directory, entry.Name())); err != nil && !os.IsNotExist(err) {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) cleanupWork() error {
+	directory, err := s.ResolveRel("work")
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(directory)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
+			return err
 		}
 	}
 	return nil

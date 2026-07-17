@@ -2,6 +2,7 @@ package proofread
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -13,6 +14,28 @@ type DependencyDiagnostics struct {
 	PythonPath, PythonVersion string
 	CodexPath, CodexVersion   string
 	CodexFlags                map[string]bool
+}
+
+func CheckCodexLogin(ctx context.Context, runner CommandRunner, codexPath string) (string, error) {
+	if runner == nil {
+		runner = OSCommandRunner{}
+	}
+	path := strings.TrimSpace(codexPath)
+	if path == "" {
+		path, _ = exec.LookPath("codex")
+	}
+	if path == "" {
+		return "", &CodexError{Code: "codex_not_found", Message: "Codex CLI was not found in PATH"}
+	}
+	result, err := runner.Run(ctx, CommandSpec{Path: path, Args: []string{"login", "status"}, Timeout: 15 * time.Second})
+	if err != nil {
+		return "", &CodexError{Code: "codex_unavailable", Message: "Codex login status check failed", Stderr: result.Stderr, ExitCode: result.ExitCode}
+	}
+	status := strings.TrimSpace(firstNonEmpty(result.Stdout, result.Stderr))
+	if status == "" {
+		return "", fmt.Errorf("Codex login status returned no result")
+	}
+	return status, nil
 }
 
 func (d DependencyDiagnostics) CodexFlagsReady() bool {

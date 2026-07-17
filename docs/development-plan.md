@@ -261,13 +261,11 @@ SQLite store 保持 concrete，不为了测试建立一套等大的接口；测�
 <library>/
 ├── library.db
 ├── originals/<book-id>/<file-id>.<ext>
-├── revisions/<book-id>/<file-id>.<ext>
+├── revisions/<book-id>/<revision-file-id>/{revision.<ext>,report.md,audit.jsonl}
 ├── artifacts/<book-id>/<file-id>.<ext>
-├── reports/<book-id>/<proofread-run-id>/<file-id>.<ext>
-├── proofreads/<book-id>/<proofread-run-id>/engine-state/
+├── proofreads/<book-id>/<proofread-run-id>/state/{engine,...}
 ├── incoming/<operation-id>.part
 ├── work/<task-id>/
-├── runtime/proofreader-v<engine-version>/
 ├── originals/                  # 旧版目录，迁移后继续按原路径引用
 ├── converted/                  # 旧版目录，迁移后继续按原路径引用
 └── index.json                  # 旧版索引，迁移成功后保留只读备份
@@ -550,7 +548,7 @@ codex exec
 - `exec.LookPath(codex)`。
 - `codex --version`。
 - `codex exec --help` 是否包含方案依赖的 `--ephemeral`、`--output-schema`、`--output-last-message`、`--image` 和 `--ignore-user-config`。
-- 使用一个不发送书籍内容的最小结构化请求验证登录和模型可用性；该检查必须由用户显式点击。
+- 用户显式点击时运行不发送书籍内容、也不调用模型的 `codex login status`；真实模型可用性在开始校对时验证。
 
 ### 8.8 校对 executor
 
@@ -558,20 +556,19 @@ codex exec
 
 1. 创建全新的 `work/<task-id>/proofread-state`，释放匹配 engine version 的脚本。
 2. 验证源文件 SHA，调用 TXT 或 EPUB `init`。
-3. 读取 manifest 和批次清单，创建 `proofread_runs` running 记录。
+3. 读取 manifest 和批次清单；运行中状态只存在于统一 `tasks` 记录，不提前暴露 proofread run。
 4. 按固定 wave 调用初审；每个 batch 无论是否有候选都必须显式完成。
 5. EPUB 逐个处理正文引用图片；不可检查图片按脚本契约记录 skipped。
 6. 合并当前 wave glossary 后再开始下一 wave。
 7. 为每个候选启动隔离复核，不向复核提示泄漏第一轮 confidence 和 reason。
 8. 运行脚本 `status` 和 `verify`；任何缺批次、缺复核或源哈希变化都失败。
-9. 在单个数据库事务中导入 run、候选、复核结果和完成摘要。
-10. 将成功运行所需的不可变 engine state 复制到 `proofreads/<book-id>/<run-id>/engine-state`，用于后续修订任务重建，并把安全相对路径写入 `proofread_runs`。
-11. 标记 run/task completed。
+9. 把当次精确版本的 engine 一并保存进 state。
+10. 将完整 state 原子移动到 `proofreads/<book-id>/<run-id>/state`，并在单个数据库事务中导入 run、候选、复核结果和完成摘要。
+11. 同一提交把 run/task 标记 completed；提交前没有可见的书籍级中间状态。
 
 任务失败或取消时：
 
-- `proofread_runs` 标记 failed/canceled，用于显示历史。
-- 不把不完整候选暴露到人工复核页。
+- 不创建 `proofread_runs`，也不把不完整候选暴露到人工复核页；失败/取消历史由统一任务记录保留。
 - 删除或由启动清理器删除该任务工作目录。
 - 用户重试时从步骤 1 创建全新 run 和 state。
 

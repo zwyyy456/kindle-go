@@ -323,5 +323,8 @@ func revisionFailure(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return err
 	}
+	if commandNotFound(err) {
+		return &task.ExecutionError{Code: "python_not_found", Message: "python3 was not found", Err: err}
+	}
 	return &task.ExecutionError{Code: "revision_failed", Err: err}
 }

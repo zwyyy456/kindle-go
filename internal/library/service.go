@@ -68,6 +68,10 @@ func (s *Service) GetFile(ctx context.Context, id string) (File, bool, error) {
 	return fileFromStore(file), ok, err
 }
 
+func (s *Service) Diagnostics(ctx context.Context) (store.Diagnostics, error) {
+	return s.store.Diagnostics(ctx)
+}
+
 func (s *Service) CompatibilityForFile(ctx context.Context, fileID string) (CompatibilityReport, bool, error) {
 	record, found, err := s.store.Compatibility(ctx, fileID)
 	if err != nil || !found {

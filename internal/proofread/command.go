@@ -31,6 +31,11 @@ type CommandRunner interface {
 	Run(context.Context, CommandSpec) (CommandResult, error)
 }
 
+func commandNotFound(err error) bool {
+	var execErr *exec.Error
+	return errors.As(err, &execErr) || errors.Is(err, os.ErrNotExist)
+}
+
 type OSCommandRunner struct {
 	CapturedOutputBytes int
 }
