@@ -90,6 +90,9 @@ func TestSVGRequiresConverterAndAcceptsPNG(t *testing.T) {
 }
 
 func TestCalibreExtractsNativeCover(t *testing.T) {
+	if os.Getenv("KINDLE_GO_CALIBRE_TEST") != "1" {
+		t.Skip("set KINDLE_GO_CALIBRE_TEST=1 to run the external Calibre integration test")
+	}
 	tool, err := exec.LookPath("ebook-meta")
 	if err != nil {
 		t.Skip("Calibre ebook-meta is not installed")

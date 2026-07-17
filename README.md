@@ -33,6 +33,21 @@ The Web UI v1 implementation order and milestone acceptance checks are documente
 - `internal/server`: local upload library, conversion Web UI, and Kindle download page.
 - `internal/server/cmd`: `serve` command-line flags.
 
+## Testing
+
+Run the default Go and proofreading workflow checks with:
+
+```sh
+tools/test.sh
+```
+
+The default suite does not depend on Calibre. To additionally verify cover extraction with a
+locally installed and compatible `ebook-meta`, run:
+
+```sh
+KINDLE_GO_CALIBRE_TEST=1 go test ./internal/azw3 -run TestCalibreExtractsNativeCover
+```
+
 ## Vocabulary Export
 
 Current scope:
