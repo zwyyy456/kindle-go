@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
 	"sync"
@@ -29,11 +30,15 @@ type Runner struct {
 
 	prepareMu  sync.Mutex
 	instanceID string
+	logMu      sync.Mutex
+	logWriter  io.Writer
 }
 
 func NewRunner(service *Service, executors map[Type]Executor) *Runner {
 	return &Runner{service: service, executors: executors, poll: 100 * time.Millisecond, heartbeat: 5 * time.Second, staleAfter: 15 * time.Second}
 }
+
+func (r *Runner) SetLogWriter(writer io.Writer) { r.logWriter = writer }
 
 func (r *Runner) Run(ctx context.Context) error {
 	if err := r.Prepare(ctx); err != nil {
@@ -173,12 +178,20 @@ func (r *Runner) execute(parent context.Context, value Task) {
 	executor := r.executors[value.Type]
 	if executor == nil {
 		_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Failed), "executor_not_found", fmt.Sprintf("no executor registered for %s", value.Type), r.service.now())
+		r.logTask(value, "finished", "failed", "executor_not_found", current.StartedAt)
 		return
 	}
-	reporter := progressReporter{store: r.service.store, taskID: value.ID}
+	r.logTask(value, "started", "prepare", "", current.StartedAt)
+	reporter := progressReporter{store: r.service.store, taskID: value.ID, report: func(stage string) {
+		r.logTask(value, "progress", stage, "", current.StartedAt)
+	}}
 	err = executeSafely(ctx, executor, value, reporter)
 	latest, ok, getErr := r.service.Get(context.Background(), value.ID)
-	if getErr != nil || !ok || latest.Status == Canceled {
+	if getErr != nil || !ok {
+		return
+	}
+	if latest.Status == Canceled {
+		r.logTask(value, "finished", "canceled", "task_canceled", current.StartedAt)
 		return
 	}
 	if parent.Err() != nil {
@@ -186,6 +199,7 @@ func (r *Runner) execute(parent context.Context, value Task) {
 	}
 	if err == nil {
 		_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Completed), "", "", r.service.now())
+		r.logTask(value, "finished", "completed", "", current.StartedAt)
 		return
 	}
 	code := "executor_failed"
@@ -197,6 +211,24 @@ func (r *Runner) execute(parent context.Context, value Task) {
 		}
 	}
 	_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Failed), code, message, r.service.now())
+	r.logTask(value, "finished", "failed", code, current.StartedAt)
+}
+
+func (r *Runner) logTask(value Task, event, stage, code string, startedAt time.Time) {
+	if r.logWriter == nil {
+		return
+	}
+	duration := time.Duration(0)
+	if !startedAt.IsZero() {
+		duration = time.Since(startedAt).Round(time.Millisecond)
+	}
+	r.logMu.Lock()
+	defer r.logMu.Unlock()
+	fmt.Fprintf(r.logWriter, "task event=%s task_id=%s book_id=%s type=%s stage=%s duration=%s", event, value.ID, value.BookID, value.Type, stage, duration)
+	if code != "" {
+		fmt.Fprintf(r.logWriter, " error_code=%s", code)
+	}
+	fmt.Fprintln(r.logWriter)
 }
 
 func executeSafely(ctx context.Context, executor Executor, value Task, reporter ProgressReporter) (err error) {
@@ -213,8 +245,15 @@ type progressReporter struct {
 		UpdateTaskProgress(context.Context, string, string, int, int) error
 	}
 	taskID string
+	report func(stage string)
 }
 
 func (r progressReporter) Report(ctx context.Context, stage string, current, total int) error {
-	return r.store.UpdateTaskProgress(ctx, r.taskID, stage, current, total)
+	if err := r.store.UpdateTaskProgress(ctx, r.taskID, stage, current, total); err != nil {
+		return err
+	}
+	if r.report != nil {
+		r.report(stage)
+	}
+	return nil
 }

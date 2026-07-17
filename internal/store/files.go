@@ -224,6 +224,12 @@ VALUES(?, ?, 'artifact', 'pending', ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''),
 		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
 		return File{}, err
 	}
+	if err := appendTaskEvent(context.Background(), finalizeTx, commit.TaskID, "info", "completed", "Task completed", time.Now()); err != nil {
+		_ = finalizeTx.Rollback()
+		_ = os.Remove(finalPath)
+		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
+		return File{}, err
+	}
 	if err := finalizeTx.Commit(); err != nil {
 		_ = os.Remove(finalPath)
 		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)

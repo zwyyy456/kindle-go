@@ -148,6 +148,30 @@ func TestWebGenerateCreatesTaskAndLegacyConvertRouteIsGone(t *testing.T) {
 	}
 }
 
+func TestTaskDetailAndJSONExposePersistedEventTimeline(t *testing.T) {
+	handler, service, taskService, _ := newHTTPTestHandler(t)
+	created, err := service.Import(context.Background(), library.ImportRequest{Filename: "events.txt", Reader: strings.NewReader("正文")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := taskService.Create(context.Background(), task.CreateRequest{BookID: created.Book.ID, Type: task.GenerateEPUB, InputFileID: created.Book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/tasks/"+value.ID, nil))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "Event timeline") || !strings.Contains(detail.Body.String(), "Task queued") {
+		t.Fatalf("task detail = %d %s", detail.Code, detail.Body.String())
+	}
+
+	status := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/tasks/"+value.ID+".json", nil))
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"events"`) || !strings.Contains(status.Body.String(), `"stage":"queued"`) {
+		t.Fatalf("task JSON = %d %s", status.Code, status.Body.String())
+	}
+}
+
 func TestWebStartsSingleActiveProofreadTaskWithSettingsSnapshot(t *testing.T) {
 	handler, service, taskService, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})

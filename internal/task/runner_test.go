@@ -1,6 +1,7 @@
 package task
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -131,6 +132,62 @@ func TestRunnerTurnsExecutorErrorAndPanicIntoFailedTasks(t *testing.T) {
 	}
 	cancelRunner()
 	waitRunner(t, runnerDone)
+}
+
+func TestTaskEventsPersistLifecycleWithoutExecutorContent(t *testing.T) {
+	service, bookID, inputID := newTaskTestService(t)
+	value, err := service.Create(context.Background(), CreateRequest{BookID: bookID, Type: GenerateEPUB, InputFileID: inputID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := executorFunc(func(ctx context.Context, _ Task, progress ProgressReporter) error {
+		return progress.Report(ctx, "write", 2, 4)
+	})
+	cancelRunner, runnerDone := startRunner(t, service, map[Type]Executor{GenerateEPUB: executor})
+	waitStatus(t, service, value.ID, Completed)
+	cancelRunner()
+	waitRunner(t, runnerDone)
+	events, err := service.Events(context.Background(), value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("events = %#v", events)
+	}
+	wantStages := []string{"queued", "prepare", "write", "completed"}
+	for index, event := range events {
+		if event.Seq != index+1 || event.Stage != wantStages[index] || strings.Contains(event.Message, bookID) {
+			t.Fatalf("event %d = %#v", index, event)
+		}
+	}
+}
+
+func TestRunnerLogsTaskMetadataWithoutParametersOrBookContent(t *testing.T) {
+	service, bookID, inputID := newTaskTestService(t)
+	value, err := service.Create(context.Background(), CreateRequest{
+		BookID: bookID, Type: GenerateEPUB, InputFileID: inputID, ParametersJSON: `{"title":"sensitive正文"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	runner := NewRunner(service, map[Type]Executor{GenerateEPUB: executorFunc(func(ctx context.Context, _ Task, progress ProgressReporter) error {
+		return progress.Report(ctx, "write", 1, 1)
+	})})
+	runner.SetLogWriter(&output)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	waitStatus(t, service, value.ID, Completed)
+	cancel()
+	waitRunner(t, done)
+	logged := output.String()
+	if !strings.Contains(logged, "task_id="+value.ID) || !strings.Contains(logged, "book_id="+bookID) || !strings.Contains(logged, "stage=write") {
+		t.Fatalf("task log = %q", logged)
+	}
+	if strings.Contains(logged, "sensitive正文") || strings.Contains(logged, value.ParametersJSON) {
+		t.Fatalf("task log exposed parameters: %q", logged)
+	}
 }
 
 func TestRunnerRecoversInterruptedTaskAndKeepsQueuedTask(t *testing.T) {

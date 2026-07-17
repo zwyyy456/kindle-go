@@ -88,6 +88,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		task.BuildRevisionTXT:  revisionExecutor,
 		task.BuildRevisionEPUB: revisionExecutor,
 	})
+	runner.SetLogWriter(stdout)
 	handler := server.Handler{
 		Library:    libraryService,
 		Generation: generationService,

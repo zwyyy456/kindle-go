@@ -96,6 +96,9 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.ID, run.ID, candidate.Kin
 			return err
 		}
 	}
+	if err := appendTaskEvent(context.Background(), tx, run.TaskID, "info", "completed", "Task completed", now); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}

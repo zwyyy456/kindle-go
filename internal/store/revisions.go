@@ -161,6 +161,11 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, values[0].id, record.SourceSHA
 		cleanupPending()
 		return RevisionCommitResult{}, err
 	}
+	if err := appendTaskEvent(context.Background(), finalizeTx, commit.TaskID, "info", "completed", "Task completed", time.Now()); err != nil {
+		_ = finalizeTx.Rollback()
+		cleanupPending()
+		return RevisionCommitResult{}, err
+	}
 	if err := finalizeTx.Commit(); err != nil {
 		cleanupPending()
 		return RevisionCommitResult{}, err

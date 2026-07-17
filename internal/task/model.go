@@ -41,6 +41,15 @@ type Task struct {
 	FinishedAt      time.Time
 }
 
+type Event struct {
+	TaskID    string    `json:"task_id"`
+	Seq       int       `json:"seq"`
+	Level     string    `json:"level"`
+	Stage     string    `json:"stage"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type CreateRequest struct {
 	BookID         string
 	Type           Type

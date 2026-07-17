@@ -718,14 +718,12 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/tasks/")
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[0] == "" {
-		http.NotFound(w, r)
+	if r.Method == http.MethodGet && strings.HasSuffix(rest, ".json") && !strings.Contains(strings.TrimSuffix(rest, ".json"), "/") {
+		h.writeTaskStatus(w, r, strings.TrimSuffix(rest, ".json"))
 		return
 	}
-	id, action := parts[0], parts[1]
-	if action == "status" && r.Method == http.MethodGet {
-		value, ok, err := h.Tasks.Get(r.Context(), id)
+	if r.Method == http.MethodGet && rest != "" && !strings.Contains(rest, "/") {
+		value, ok, err := h.Tasks.Get(r.Context(), rest)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -734,8 +732,24 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": value.ID, "status": value.Status, "stage": value.Stage, "current": value.ProgressCurrent, "total": value.ProgressTotal, "error_code": value.ErrorCode, "error_message": value.ErrorMessage})
+		events, err := h.Tasks.Events(r.Context(), rest)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := taskDetailTemplate.Execute(w, taskDetailPageData{Task: taskViews([]task.Task{value})[0], Events: taskEventViews(events)}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	id, action := parts[0], parts[1]
+	if action == "status" && r.Method == http.MethodGet {
+		h.writeTaskStatus(w, r, id)
 		return
 	}
 	if r.Method != http.MethodPost || (action != "cancel" && action != "retry") {
@@ -758,6 +772,30 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		message = err.Error()
 	}
 	http.Redirect(w, r, "/books/"+original.BookID+"?message="+urlMessage(message), http.StatusSeeOther)
+}
+
+func (h Handler) writeTaskStatus(w http.ResponseWriter, r *http.Request, id string) {
+	value, ok, err := h.Tasks.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	events, err := h.Tasks.Events(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id": value.ID, "status": value.Status, "stage": value.Stage,
+		"current": value.ProgressCurrent, "total": value.ProgressTotal,
+		"error_code": value.ErrorCode, "error_message": value.ErrorMessage,
+		"events": events,
+	})
 }
 
 func (h Handler) recordViews(records []library.Book) []recordView {
@@ -920,6 +958,11 @@ type tasksPageData struct {
 	Message string
 }
 
+type taskDetailPageData struct {
+	Task   taskView
+	Events []taskEventView
+}
+
 type txtPreviewPageData struct {
 	BookID        string
 	Charset       string
@@ -970,6 +1013,14 @@ type taskView struct {
 	CreatedAt string
 }
 
+type taskEventView struct {
+	Seq       int
+	Level     string
+	Stage     string
+	Message   string
+	CreatedAt string
+}
+
 func taskViews(values []task.Task) []taskView {
 	views := make([]taskView, 0, len(values))
 	for _, value := range values {
@@ -984,6 +1035,17 @@ func taskViews(values []task.Task) []taskView {
 			CanRetry:  value.Status == task.Failed || value.Status == task.Canceled,
 			Active:    value.Status == task.Queued || value.Status == task.Running,
 			CreatedAt: value.CreatedAt.Format("2006-01-02 15:04"),
+		})
+	}
+	return views
+}
+
+func taskEventViews(values []task.Event) []taskEventView {
+	views := make([]taskEventView, 0, len(values))
+	for _, value := range values {
+		views = append(views, taskEventView{
+			Seq: value.Seq, Level: value.Level, Stage: value.Stage, Message: value.Message,
+			CreatedAt: value.CreatedAt.Format("2006-01-02 15:04:05"),
 		})
 	}
 	return views
@@ -1135,7 +1197,7 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
 
   <h2>Tasks</h2>
   <table><thead><tr><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th><th>Actions</th></tr></thead><tbody>
-  {{range .Tasks}}<tr data-task-id="{{.ID}}" data-task-status="{{.Status}}"><td>{{.Type}}</td><td>{{.Status}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td><td>
+  {{range .Tasks}}<tr data-task-id="{{.ID}}" data-task-status="{{.Status}}"><td><a href="/tasks/{{.ID}}">{{.Type}}</a></td><td>{{.Status}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td><td>
     {{if .CanCancel}}<form class="inline" method="post" action="/tasks/{{.ID}}/cancel"><button type="submit">Cancel</button></form>{{end}}
     {{if .CanRetry}}<form class="inline" method="post" action="/tasks/{{.ID}}/retry"><button type="submit">Retry from beginning</button></form>{{end}}
   </td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
@@ -1164,7 +1226,20 @@ var tasksTemplate = template.Must(template.New("tasks").Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Tasks — Kindle Go</title></head><body>
 <p><a href="/books">← Library</a></p><h1>Tasks</h1>{{if .Message}}<p>{{.Message}}</p>{{end}}
 <table><thead><tr><th>Book</th><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th></tr></thead><tbody>
-{{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td>{{.Type}}</td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
+{{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td><a href="/tasks/{{.ID}}">{{.Type}}</a></td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
+</tbody></table></body></html>`))
+
+var taskDetailTemplate = template.Must(template.New("task-detail").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Task {{.Task.ID}} — Kindle Go</title><style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.45; color: #1f2933; }
+table { width: 100%; border-collapse: collapse; } th, td { text-align: left; border-bottom: 1px solid #d8dee6; padding: 8px; }
+.error { color: #9b1c1c; } .warning { color: #8a5b00; } .muted { color: #627282; }
+</style></head><body>
+<p><a href="/tasks">← All tasks</a> · <a href="/books/{{.Task.BookID}}">Book</a></p>
+<h1>{{.Task.Type}}</h1><p>Status: <strong>{{.Task.Status}}</strong> · stage: {{.Task.Stage}} · progress: {{.Task.Progress}}</p>
+{{if .Task.Error}}<p class="error">{{.Task.Error}}</p>{{end}}
+<h2>Event timeline</h2><table><thead><tr><th>Time</th><th>Level</th><th>Stage</th><th>Event</th></tr></thead><tbody>
+{{range .Events}}<tr><td>{{.CreatedAt}}</td><td class="{{.Level}}">{{.Level}}</td><td>{{.Stage}}</td><td>{{.Message}}</td></tr>{{else}}<tr><td colspan="4">No events.</td></tr>{{end}}
 </tbody></table></body></html>`))
 
 var proofreadTemplate = template.Must(template.New("proofread").Parse(`<!doctype html>

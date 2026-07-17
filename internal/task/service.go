@@ -57,6 +57,21 @@ func (s *Service) List(ctx context.Context, bookID string) ([]Task, error) {
 	return tasksFromStore(records), err
 }
 
+func (s *Service) Events(ctx context.Context, taskID string) ([]Event, error) {
+	records, err := s.store.TaskEvents(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]Event, 0, len(records))
+	for _, record := range records {
+		events = append(events, Event{
+			TaskID: record.TaskID, Seq: record.Seq, Level: record.Level, Stage: record.Stage,
+			Message: record.Message, CreatedAt: record.CreatedAt,
+		})
+	}
+	return events, nil
+}
+
 func (s *Service) Cancel(ctx context.Context, id string) error {
 	previous, changed, err := s.store.CancelTask(ctx, id, s.now())
 	if err != nil {

@@ -28,6 +28,15 @@ type TaskRecord struct {
 	FinishedAt      time.Time
 }
 
+type TaskEventRecord struct {
+	TaskID    string
+	Seq       int
+	Level     string
+	Stage     string
+	Message   string
+	CreatedAt time.Time
+}
+
 type CreateTaskParams struct {
 	BookID         string
 	Type           string
@@ -95,6 +104,9 @@ INSERT INTO tasks(id, book_id, type, status, queue_seq, input_file_id, retry_of_
 VALUES(?, ?, ?, 'queued', ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)
 `, id, params.BookID, params.Type, queueSeq, params.InputFileID, params.RetryOfTaskID, parameters, formatTime(createdAt))
 	if err != nil {
+		return TaskRecord{}, err
+	}
+	if err := appendTaskEvent(ctx, tx, id, "info", "queued", "Task queued", createdAt); err != nil {
 		return TaskRecord{}, err
 	}
 	return TaskRecord{ID: id, BookID: params.BookID, Type: params.Type, Status: "queued", QueueSeq: queueSeq, InputFileID: params.InputFileID, RetryOfTaskID: params.RetryOfTaskID, ParametersJSON: parameters, CreatedAt: createdAt}, nil
@@ -166,6 +178,9 @@ func (s *Store) ClaimNextTask(ctx context.Context, types []string, now time.Time
 	if err != nil || rows != 1 {
 		return TaskRecord{}, false, err
 	}
+	if err := appendTaskEvent(ctx, tx, id, "info", "prepare", "Task started", now); err != nil {
+		return TaskRecord{}, false, err
+	}
 	record, err := scanTask(tx.QueryRowContext(ctx, taskSelect+` WHERE id = ?`, id))
 	if err != nil {
 		return TaskRecord{}, false, err
@@ -177,7 +192,12 @@ func (s *Store) ClaimNextTask(ctx context.Context, types []string, now time.Time
 }
 
 func (s *Store) UpdateTaskProgress(ctx context.Context, id, stage string, current, total int) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET stage = ?, progress_current = ?, progress_total = ? WHERE id = ? AND status = 'running'`, stage, current, total, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE tasks SET stage = ?, progress_current = ?, progress_total = ? WHERE id = ? AND status = 'running'`, stage, current, total, id)
 	if err != nil {
 		return err
 	}
@@ -188,19 +208,43 @@ func (s *Store) UpdateTaskProgress(ctx context.Context, id, stage string, curren
 	if rows == 0 {
 		return fmt.Errorf("task %q is not running", id)
 	}
-	return nil
+	message := "Stage started"
+	if total > 0 {
+		message = fmt.Sprintf("Progress %d/%d", current, total)
+	}
+	if err := appendTaskEvent(ctx, tx, id, "info", stage, message, time.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) FinishTask(ctx context.Context, id, status, code, message string, now time.Time) (bool, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ?, error_code = ?, error_message = ?, finished_at = ?, stage = ? WHERE id = ? AND status = 'running'`, status, code, message, formatTime(now), status, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE tasks SET status = ?, error_code = ?, error_message = ?, finished_at = ?, stage = ? WHERE id = ? AND status = 'running'`, status, code, message, formatTime(now), status, id)
 	if err != nil {
 		return false, err
 	}
 	rows, err := result.RowsAffected()
-	return rows == 1, err
+	if err != nil || rows != 1 {
+		return false, err
+	}
+	level, eventMessage := "info", "Task completed"
+	if status == "failed" {
+		level, eventMessage = "error", "Task failed: "+firstNonEmpty(code, "executor_failed")
+	} else if status == "canceled" {
+		level, eventMessage = "warning", "Task canceled"
+	}
+	if err := appendTaskEvent(ctx, tx, id, level, status, eventMessage, now); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 func (s *Store) CancelTask(ctx context.Context, id string, now time.Time) (string, bool, error) {
@@ -227,6 +271,9 @@ func (s *Store) CancelTask(ctx context.Context, id string, now time.Time) (strin
 	}
 	rows, err := result.RowsAffected()
 	if err != nil || rows != 1 {
+		return status, false, err
+	}
+	if err := appendTaskEvent(ctx, tx, id, "warning", "canceled", "Task canceled by user", now); err != nil {
 		return status, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -262,11 +309,91 @@ func (s *Store) RecoverRunningTasks(ctx context.Context, now time.Time) (int64, 
 	if now.IsZero() {
 		now = time.Now()
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = 'failed', error_code = 'task_process_interrupted', error_message = 'server stopped while task was running; retry starts from the beginning', finished_at = ?, stage = 'failed' WHERE status = 'running'`, formatTime(now))
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE status = 'running' ORDER BY queue_seq`)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'failed', error_code = 'task_process_interrupted', error_message = 'server stopped while task was running; retry starts from the beginning', finished_at = ?, stage = 'failed' WHERE id = ? AND status = 'running'`, formatTime(now), id); err != nil {
+			return 0, err
+		}
+		if err := appendTaskEvent(ctx, tx, id, "error", "failed", "Task failed: task_process_interrupted", now); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(ids)), nil
+}
+
+func (s *Store) TaskEvents(ctx context.Context, taskID string) ([]TaskEventRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id, seq, level, stage, message, created_at FROM task_events WHERE task_id = ? ORDER BY seq`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []TaskEventRecord
+	for rows.Next() {
+		var event TaskEventRecord
+		var created string
+		if err := rows.Scan(&event.TaskID, &event.Seq, &event.Level, &event.Stage, &event.Message, &created); err != nil {
+			return nil, err
+		}
+		event.CreatedAt, err = parseTime(created)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+type taskEventWriter interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func appendTaskEvent(ctx context.Context, writer taskEventWriter, taskID, level, stage, message string, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "Task updated"
+	}
+	var seq int
+	if err := writer.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) + 1 FROM task_events WHERE task_id = ?`, taskID).Scan(&seq); err != nil {
+		return err
+	}
+	_, err := writer.ExecContext(ctx, `INSERT INTO task_events(task_id, seq, level, stage, message, created_at) VALUES(?, ?, ?, ?, ?, ?)`, taskID, seq, level, stage, message, formatTime(now))
+	return err
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 const taskSelect = `SELECT id, book_id, type, status, queue_seq, COALESCE(input_file_id, ''), COALESCE(retry_of_task_id, ''), parameters_json, stage, progress_current, progress_total, error_code, error_message, created_at, COALESCE(started_at, ''), COALESCE(finished_at, '') FROM tasks`
