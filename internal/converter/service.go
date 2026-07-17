@@ -10,7 +10,6 @@ import (
 	"github.com/flashdict/kindle2flashdict/internal/azw3"
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/epub"
-	txtapp "github.com/flashdict/kindle2flashdict/internal/txt2epub/app"
 )
 
 type Format string
@@ -51,11 +50,6 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	out := req.Stdout
-	if out == nil {
-		out = io.Discard
-	}
-
 	switch req.InputFormat {
 	case FormatTXT:
 		cfg := req.TXTConfig
@@ -63,7 +57,14 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 		cfg.Output.Format = string(req.OutputFormat)
 		applyMetadata(&cfg, req.Metadata)
 		txtconfig.Normalize(&cfg)
-		if err := txtapp.Run(req.InputPath, cfg, txtapp.Options{Preview: req.Preview, Verbose: req.Verbose}, out); err != nil {
+		analysis, err := AnalyzeTXT(req.InputPath, cfg)
+		if err != nil {
+			return Result{}, err
+		}
+		if req.Preview {
+			return Result{OutputPath: req.OutputPath}, nil
+		}
+		if err := WriteTXTAnalysis(req.OutputPath, string(req.OutputFormat), analysis); err != nil {
 			return Result{}, err
 		}
 	case FormatEPUB:

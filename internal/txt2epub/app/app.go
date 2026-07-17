@@ -1,16 +1,13 @@
 package app
 
 import (
-	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 
-	"github.com/flashdict/kindle2flashdict/internal/azw3"
 	"github.com/flashdict/kindle2flashdict/internal/config"
-	"github.com/flashdict/kindle2flashdict/internal/epub"
+	"github.com/flashdict/kindle2flashdict/internal/converter"
 	"github.com/flashdict/kindle2flashdict/internal/txt2epub/book"
-	txt "github.com/flashdict/kindle2flashdict/internal/txt2epub/text"
 )
 
 type Options struct {
@@ -20,60 +17,30 @@ type Options struct {
 }
 
 func Run(input string, cfg config.Config, opts Options, stdout io.Writer) error {
-	decoded, err := txt.ReadFile(input)
-	if err != nil {
-		return err
-	}
-
-	if cfg.Metadata.Title == "" {
-		cfg.Metadata.Title = strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
-	}
 	config.Normalize(&cfg)
-
-	parser, err := book.NewParser(cfg)
-	if err != nil {
-		return err
-	}
-	cleaner, err := txt.NewCleaner(cfg)
-	if err != nil {
-		return err
-	}
-	lines, textStats := cleaner.Clean(decoded.Text, cfg, parser.IsHeading)
-	textStats.Charset = decoded.Charset
-
-	b, err := parser.Build(lines, cfg, textStats)
+	analysis, err := converter.AnalyzeTXT(input, cfg)
 	if err != nil {
 		return err
 	}
 
 	if opts.Preview {
-		book.PrintPreview(stdout, b)
+		book.PrintPreview(stdout, analysis.Parsed)
 		return nil
 	}
 
 	output := config.OutputPath(input, cfg)
-	ebookBook := book.ToEBook(b)
 	format := cfg.Output.Format
 	if strings.EqualFold(filepath.Ext(output), ".azw3") {
 		format = "azw3"
 	}
-	switch format {
-	case "epub":
-		if err := epub.Write(output, ebookBook); err != nil {
-			return err
-		}
-	case "azw3":
-		if err := azw3.Write(output, ebookBook, azw3.Options{}); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("unsupported format %q", cfg.Output.Format)
+	if err := converter.WriteTXTAnalysis(output, format, analysis); err != nil {
+		return err
 	}
 
 	if opts.Verbose {
-		book.PrintPreview(stdout, b)
+		book.PrintPreview(stdout, analysis.Parsed)
 	} else {
-		book.PrintSummary(stdout, b, output)
+		book.PrintSummary(stdout, analysis.Parsed, output)
 	}
 	return nil
 }

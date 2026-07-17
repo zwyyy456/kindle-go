@@ -188,6 +188,22 @@ func TestBookDeletionRequiresConfirmationAndRemovesBook(t *testing.T) {
 	}
 }
 
+func TestTXTPreviewUsesSubmittedParameters(t *testing.T) {
+	handler, service, _ := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章 开始\n\n正文。")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"title": {"预览标题"}, "split_level": {"1"}}
+	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/txt-preview", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "utf-8") || !strings.Contains(response.Body.String(), "第一章 开始") {
+		t.Fatalf("preview = %d, %q", response.Code, response.Body.String())
+	}
+}
+
 func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service) {
 	t.Helper()
 	storage, err := store.Open(t.TempDir())

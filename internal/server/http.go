@@ -115,6 +115,13 @@ func (h Handler) handleBookRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Method == http.MethodPost && strings.HasSuffix(path, "/txt-preview") {
+		bookID := strings.TrimSuffix(path, "/txt-preview")
+		if bookID != "" && !strings.Contains(bookID, "/") {
+			h.handleTXTPreview(w, r, bookID)
+			return
+		}
+	}
 	if r.Method == http.MethodPost && strings.HasSuffix(path, "/delete") {
 		bookID := strings.TrimSuffix(path, "/delete")
 		if bookID != "" && !strings.Contains(bookID, "/") {
@@ -274,18 +281,53 @@ func (h Handler) handleGenerate(w http.ResponseWriter, r *http.Request, bookID s
 	}
 	_, err := h.Generation.Create(r.Context(), generation.CreateRequest{
 		BookID: bookID, Formats: formats,
-		Options: generation.Options{
-			Title: r.Form.Get("title"), Author: r.Form.Get("author"), Language: r.Form.Get("language"),
-			H1Regex: r.Form.Get("h1_regex"), H2Regex: r.Form.Get("h2_regex"),
-			SplitLevel: parseInt(r.Form.Get("split_level")), LineHeight: parseFloat(r.Form.Get("line_height")),
-			ParagraphSpacing: r.Form.Get("paragraph_spacing"), ParagraphIndent: r.Form.Get("paragraph_indent"), TextAlign: r.Form.Get("text_align"),
-		},
+		Options: generationOptionsFromForm(r),
 	})
 	if err != nil {
 		http.Redirect(w, r, "/books/"+bookID+"?message="+urlMessage("generate failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/books/"+bookID+"?message=task+queued", http.StatusSeeOther)
+}
+
+func (h Handler) handleTXTPreview(w http.ResponseWriter, r *http.Request, bookID string) {
+	if h.Generation == nil {
+		http.Error(w, "generation service is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	analysis, err := h.Generation.PreviewTXT(r.Context(), bookID, generationOptionsFromForm(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	data := txtPreviewPageData{
+		BookID: bookID, Charset: analysis.Charset,
+		OriginalLines: analysis.Stats.Text.OriginalLines, DroppedLines: analysis.Stats.Text.DroppedLines,
+		BlankLines: analysis.Stats.Text.BlankLines, MergedLines: analysis.Stats.Text.MergedLines,
+		Sections: analysis.Stats.SectionCount, Paragraphs: analysis.Stats.ParagraphCount,
+	}
+	for _, entry := range analysis.TOC {
+		data.TOC = append(data.TOC, entry.Title)
+		for _, child := range entry.Children {
+			data.TOC = append(data.TOC, "— "+child.Title)
+		}
+	}
+	if err := txtPreviewTemplate.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func generationOptionsFromForm(r *http.Request) generation.Options {
+	return generation.Options{
+		Title: r.Form.Get("title"), Author: r.Form.Get("author"), Language: r.Form.Get("language"),
+		H1Regex: r.Form.Get("h1_regex"), H2Regex: r.Form.Get("h2_regex"),
+		SplitLevel: parseInt(r.Form.Get("split_level")), LineHeight: parseFloat(r.Form.Get("line_height")),
+		ParagraphSpacing: r.Form.Get("paragraph_spacing"), ParagraphIndent: r.Form.Get("paragraph_indent"), TextAlign: r.Form.Get("text_align"),
+	}
 }
 
 func (h Handler) handleDeleteBook(w http.ResponseWriter, r *http.Request, bookID string) {
@@ -558,6 +600,18 @@ type tasksPageData struct {
 	Message string
 }
 
+type txtPreviewPageData struct {
+	BookID        string
+	Charset       string
+	OriginalLines int
+	DroppedLines  int
+	BlankLines    int
+	MergedLines   int
+	Sections      int
+	Paragraphs    int
+	TOC           []string
+}
+
 type recordView struct {
 	ID           string
 	OriginalName string
@@ -724,6 +778,7 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
       <label>Paragraph indent <input type="text" name="paragraph_indent"></label>
       <label>Text align <input type="text" name="text_align"></label>
       {{end}}
+      {{if eq .Book.InputFormat "txt"}}<button type="submit" formaction="/books/{{.Book.ID}}/txt-preview">Preview TXT</button>{{end}}
       <button type="submit">Queue generation</button>
     </form>
   </fieldset>
@@ -766,6 +821,13 @@ var tasksTemplate = template.Must(template.New("tasks").Parse(`<!doctype html>
 <table><thead><tr><th>Book</th><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th></tr></thead><tbody>
 {{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td>{{.Type}}</td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
 </tbody></table></body></html>`))
+
+var txtPreviewTemplate = template.Must(template.New("txt-preview").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>TXT Preview — Kindle Go</title></head><body>
+<p><a href="/books/{{.BookID}}">← Back to book</a></p><h1>TXT Preview</h1>
+<dl><dt>Charset</dt><dd>{{.Charset}}</dd><dt>Lines</dt><dd>original {{.OriginalLines}}, dropped {{.DroppedLines}}, blank {{.BlankLines}}, merged {{.MergedLines}}</dd><dt>Structure</dt><dd>{{.Sections}} sections, {{.Paragraphs}} paragraphs</dd></dl>
+<h2>Table of contents</h2><ul>{{range .TOC}}<li>{{.}}</li>{{else}}<li>正文</li>{{end}}</ul>
+</body></html>`))
 
 var kindleTemplate = template.Must(template.New("kindle").Parse(`<!doctype html>
 <html>

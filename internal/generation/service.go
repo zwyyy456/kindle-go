@@ -9,6 +9,7 @@ import (
 	"time"
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
+	"github.com/flashdict/kindle2flashdict/internal/converter"
 	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
@@ -24,6 +25,27 @@ type Options struct {
 	ParagraphIndent  string
 	ParagraphSpacing string
 	TextAlign        string
+}
+
+func (s *Service) PreviewTXT(ctx context.Context, bookID string, opts Options) (converter.TXTAnalysis, error) {
+	book, ok, err := s.library.GetBook(ctx, bookID)
+	if err != nil {
+		return converter.TXTAnalysis{}, err
+	}
+	if !ok || book.SourceFormat != "txt" {
+		return converter.TXTAnalysis{}, fmt.Errorf("TXT preview is only available for TXT books")
+	}
+	path, _, err := s.library.ResolveOriginal(ctx, book.ID, book.Original.ID, book.Original.SHA256)
+	if err != nil {
+		return converter.TXTAnalysis{}, err
+	}
+	params := s.parameters(book, "epub", opts)
+	cfg := txtconfig.Defaults()
+	cfg.Metadata = params.Metadata
+	cfg.TXT = params.TXT
+	cfg.Style = params.Style
+	cfg.Output.Cover = params.Cover
+	return converter.AnalyzeTXT(path, cfg)
 }
 
 type CreateRequest struct {
