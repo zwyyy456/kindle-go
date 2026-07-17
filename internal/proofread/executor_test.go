@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 type fakeProofreadModel struct {
 	mu                    sync.Mutex
 	fail, proposeTXT      bool
+	verificationVerdict   string
 	active, maxConcurrent int
 }
 
@@ -67,7 +69,10 @@ func (m *fakeProofreadModel) Invoke(ctx context.Context, request CodexRequest, o
 		}
 		value.Glossary = []glossaryProposal{}
 	case *verificationOutput:
-		value.Verdict = "high"
+		value.Verdict = m.verificationVerdict
+		if value.Verdict == "" {
+			value.Verdict = "high"
+		}
 		value.Proposed = "嗤之以鼻"
 		value.Reason = "上下文明确"
 	case *imageReviewOutput:
@@ -105,6 +110,9 @@ func TestProofreadExecutorCompletesTXTAndPersistsVerifiedCandidates(t *testing.T
 	}
 	if _, err := os.Stat(statePath); err != nil {
 		t.Fatalf("persisted engine state = %v", err)
+	}
+	if version, err := os.ReadFile(filepath.Join(statePath, "engine", "ENGINE_VERSION")); err != nil || strings.TrimSpace(string(version)) != runs[0].EngineVersion {
+		t.Fatalf("persisted engine version = %q, %v", version, err)
 	}
 }
 

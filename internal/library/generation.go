@@ -46,6 +46,45 @@ func (s *Service) ResolveOriginal(ctx context.Context, bookID, fileID, expectedS
 	return path, fileFromStore(book.Original), nil
 }
 
+func (s *Service) ResolveInput(ctx context.Context, bookID, fileID, expectedSHA string) (string, File, error) {
+	stored, ok, err := s.store.File(ctx, fileID)
+	if err != nil {
+		return "", File{}, err
+	}
+	if !ok || stored.BookID != bookID || (stored.Role != "original" && stored.Role != "revision") {
+		return "", File{}, os.ErrNotExist
+	}
+	path, err := s.store.ResolveRel(stored.RelPath)
+	if err != nil {
+		return "", File{}, err
+	}
+	digest, size, err := hashLibraryFile(path)
+	if err != nil {
+		return "", File{}, err
+	}
+	if digest != stored.SHA256 || size != stored.Size || (expectedSHA != "" && digest != expectedSHA) {
+		return "", File{}, fmt.Errorf("source_hash_mismatch: input file changed after commit")
+	}
+	return path, fileFromStore(stored), nil
+}
+
+func hashLibraryFile(path string) (string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	hash := sha256.New()
+	size, copyErr := io.Copy(hash, file)
+	closeErr := file.Close()
+	if copyErr != nil {
+		return "", 0, copyErr
+	}
+	if closeErr != nil {
+		return "", 0, closeErr
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
 func (s *Service) WorkOutputPath(taskID, format string) (string, string, error) {
 	format = strings.ToLower(strings.TrimSpace(format))
 	if taskID == "" || (format != "epub" && format != "azw3") {

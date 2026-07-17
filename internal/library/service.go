@@ -63,6 +63,45 @@ func (s *Service) GetBook(ctx context.Context, id string) (Book, bool, error) {
 	return bookFromStore(book), ok, err
 }
 
+func (s *Service) GetFile(ctx context.Context, id string) (File, bool, error) {
+	file, ok, err := s.store.File(ctx, id)
+	return fileFromStore(file), ok, err
+}
+
+func (s *Service) CompatibilityForFile(ctx context.Context, fileID string) (CompatibilityReport, bool, error) {
+	record, found, err := s.store.Compatibility(ctx, fileID)
+	if err != nil || !found {
+		return CompatibilityReport{}, found, err
+	}
+	report := CompatibilityReport{FileID: record.FileID, SourceSHA256: record.SourceSHA256, Status: record.Status, CheckedAt: record.CheckedAt}
+	var metadata struct {
+		Metadata json.RawMessage `json:"metadata"`
+		Cover    json.RawMessage `json:"cover"`
+	}
+	if err := json.Unmarshal([]byte(record.MetadataJSON), &metadata); err != nil {
+		return CompatibilityReport{}, false, err
+	}
+	if err := json.Unmarshal(metadata.Metadata, &report.Metadata); err != nil {
+		return CompatibilityReport{}, false, err
+	}
+	if err := json.Unmarshal(metadata.Cover, &report.Cover); err != nil {
+		return CompatibilityReport{}, false, err
+	}
+	if err := json.Unmarshal([]byte(record.SpineJSON), &report.Spine); err != nil {
+		return CompatibilityReport{}, false, err
+	}
+	if err := json.Unmarshal([]byte(record.TOCJSON), &report.TOC); err != nil {
+		return CompatibilityReport{}, false, err
+	}
+	if err := json.Unmarshal([]byte(record.ResourcesJSON), &report.Resources); err != nil {
+		return CompatibilityReport{}, false, err
+	}
+	if err := json.Unmarshal([]byte(record.IssuesJSON), &report.Issues); err != nil {
+		return CompatibilityReport{}, false, err
+	}
+	return report, true, nil
+}
+
 func (s *Service) GetBookDetail(ctx context.Context, id string) (BookDetail, bool, error) {
 	book, ok, err := s.GetBook(ctx, id)
 	if err != nil || !ok {
@@ -78,37 +117,11 @@ func (s *Service) GetBookDetail(ctx context.Context, id string) (BookDetail, boo
 	}
 	detail := BookDetail{Book: book, Files: projection}
 	if book.SourceFormat == "epub" {
-		record, found, err := s.store.Compatibility(ctx, book.Original.ID)
+		report, found, err := s.CompatibilityForFile(ctx, book.Original.ID)
 		if err != nil {
 			return BookDetail{}, false, err
 		}
 		if found {
-			report := CompatibilityReport{FileID: record.FileID, SourceSHA256: record.SourceSHA256, Status: record.Status, CheckedAt: record.CheckedAt}
-			var metadata struct {
-				Metadata json.RawMessage `json:"metadata"`
-				Cover    json.RawMessage `json:"cover"`
-			}
-			if err := json.Unmarshal([]byte(record.MetadataJSON), &metadata); err != nil {
-				return BookDetail{}, false, err
-			}
-			if err := json.Unmarshal(metadata.Metadata, &report.Metadata); err != nil {
-				return BookDetail{}, false, err
-			}
-			if err := json.Unmarshal(metadata.Cover, &report.Cover); err != nil {
-				return BookDetail{}, false, err
-			}
-			if err := json.Unmarshal([]byte(record.SpineJSON), &report.Spine); err != nil {
-				return BookDetail{}, false, err
-			}
-			if err := json.Unmarshal([]byte(record.TOCJSON), &report.TOC); err != nil {
-				return BookDetail{}, false, err
-			}
-			if err := json.Unmarshal([]byte(record.ResourcesJSON), &report.Resources); err != nil {
-				return BookDetail{}, false, err
-			}
-			if err := json.Unmarshal([]byte(record.IssuesJSON), &report.Issues); err != nil {
-				return BookDetail{}, false, err
-			}
 			detail.Compatibility = &report
 		}
 	}
@@ -229,7 +242,7 @@ func bookFromStore(value store.Book) Book {
 func fileFromStore(value store.File) File {
 	return File{
 		ID: value.ID, BookID: value.BookID, Role: value.Role, Format: value.Format, DisplayName: value.DisplayName,
-		SHA256: value.SHA256, Size: value.Size, SourceFileID: value.SourceFileID, TaskID: value.TaskID,
+		SHA256: value.SHA256, Size: value.Size, SourceFileID: value.SourceFileID, TaskID: value.TaskID, ProofreadRunID: value.ProofreadRunID,
 		ParametersJSON: value.ParametersJSON, HasUnresolved: value.HasUnresolved, CreatedAt: value.CreatedAt,
 	}
 }

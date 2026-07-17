@@ -80,10 +80,13 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	generationExecutor := generation.NewExecutor(libraryService)
 	proofreadService := proofread.NewService(storage, libraryService, taskService, settingsService)
 	proofreadExecutor := proofread.NewExecutor(storage, libraryService, nil, nil)
+	revisionExecutor := proofread.NewRevisionExecutor(storage, libraryService, nil)
 	runner := task.NewRunner(taskService, map[task.Type]task.Executor{
-		task.GenerateEPUB: generationExecutor,
-		task.GenerateAZW3: generationExecutor,
-		task.Proofread:    proofreadExecutor,
+		task.GenerateEPUB:      generationExecutor,
+		task.GenerateAZW3:      generationExecutor,
+		task.Proofread:         proofreadExecutor,
+		task.BuildRevisionTXT:  revisionExecutor,
+		task.BuildRevisionEPUB: revisionExecutor,
 	})
 	handler := server.Handler{
 		Library:    libraryService,

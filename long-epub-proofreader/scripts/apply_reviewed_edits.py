@@ -229,7 +229,12 @@ def generate_epub(
         zout.comment = zin.comment
         for info in zin.infolist():
             data = entry_replacements.get(info.filename, zin.read(info.filename))
-            zout.writestr(clone_zipinfo(info), data, compress_type=info.compress_type)
+            cloned = clone_zipinfo(info)
+            zout.writestr(cloned, data, compress_type=info.compress_type)
+            # zipfile.writestr assigns a default Unix mode when external_attr is
+            # zero. Restore the source value on the retained central-directory
+            # record so archives produced without mode bits remain byte-faithful.
+            zout.filelist[-1].external_attr = info.external_attr
 
 
 def verify_output(

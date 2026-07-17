@@ -172,7 +172,7 @@ func TestWebStartsSingleActiveProofreadTaskWithSettingsSnapshot(t *testing.T) {
 }
 
 func TestWebReviewsCandidatesAndAppendsDecision(t *testing.T) {
-	handler, service, _, storage := newHTTPTestHandler(t)
+	handler, service, taskService, storage := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n错字\n")})
 	if err != nil {
 		t.Fatal(err)
@@ -230,6 +230,15 @@ func TestWebReviewsCandidatesAndAppendsDecision(t *testing.T) {
 	decisions, err := storage.CandidateDecisions(context.Background(), runID)
 	if err != nil || len(decisions) != 1 || decisions[0].Decision != "modify" || decisions[0].Replacement != "正字" {
 		t.Fatalf("decisions = %#v, %v", decisions, err)
+	}
+	revisionResponse := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(revisionResponse, httptest.NewRequest(http.MethodPost, "/proofreads/"+runID+"/revisions", nil))
+	if revisionResponse.Code != http.StatusSeeOther || !strings.Contains(revisionResponse.Header().Get("Location"), "revision+task+queued") {
+		t.Fatalf("revision response = %d, %q", revisionResponse.Code, revisionResponse.Header().Get("Location"))
+	}
+	tasks, err := taskService.List(context.Background(), result.Book.ID)
+	if err != nil || len(tasks) != 2 || tasks[0].Type != task.BuildRevisionTXT || tasks[0].Status != task.Queued {
+		t.Fatalf("revision tasks = %#v, %v", tasks, err)
 	}
 }
 

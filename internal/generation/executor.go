@@ -29,7 +29,7 @@ func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.P
 	if err := progress.Report(ctx, "prepare", 0, 4); err != nil {
 		return err
 	}
-	inputPath, input, err := e.library.ResolveOriginal(ctx, value.BookID, value.InputFileID, params.ExpectedSHA256)
+	inputPath, input, err := e.library.ResolveInput(ctx, value.BookID, value.InputFileID, params.ExpectedSHA256)
 	if err != nil {
 		return &task.ExecutionError{Code: errorCode(err, "source_unavailable"), Err: err}
 	}

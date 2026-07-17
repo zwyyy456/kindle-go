@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +177,62 @@ func TestGenerationFailsWhenImmutableSourceHashChanges(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestGenerationCanUseReadyRevisionAsImmutableInput(t *testing.T) {
+	storage, libraryService, taskService, book := newGenerationTest(t)
+	revisionTask, err := taskService.Create(context.Background(), task.CreateRequest{BookID: book.ID, Type: task.BuildRevisionTXT, InputFileID: book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{string(task.BuildRevisionTXT)}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim revision = %v, %v", ok, err)
+	}
+	workRel := filepath.ToSlash(filepath.Join("work", revisionTask.ID, "revision-output"))
+	workPath, err := storage.ResolveRel(workRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"revision.txt": "第一章 开始\n\n修订正文。", "report.md": "报告", "audit.jsonl": "{}\n"} {
+		if err := os.WriteFile(filepath.Join(workPath, name), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	committed, err := storage.CommitRevision(context.Background(), store.RevisionCommit{
+		BookID: book.ID, SourceFileID: book.Original.ID, TaskID: revisionTask.ID, Format: "txt",
+		RevisionName: "book-revised.txt", ReportName: "report.md", AuditName: "audit.jsonl", WorkDirRel: workRel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(libraryService, taskService, txtconfig.Defaults())
+	created, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, InputFileID: committed.Revision.ID, Formats: []string{"epub"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 1 || created[0].InputFileID != committed.Revision.ID {
+		t.Fatalf("generation task = %#v", created)
+	}
+	var params Parameters
+	if err := json.Unmarshal([]byte(created[0].ParametersJSON), &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.ExpectedSHA256 != committed.Revision.SHA256 || params.InputFormat != "txt" {
+		t.Fatalf("revision generation parameters = %#v", params)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- task.NewRunner(taskService, map[task.Type]task.Executor{task.GenerateEPUB: NewExecutor(libraryService)}).Run(ctx)
+	}()
+	waitGenerationStatus(t, taskService, created[0].ID, task.Completed)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestEPUBGenerationRequiresPersistedReportAndRechecksSource(t *testing.T) {

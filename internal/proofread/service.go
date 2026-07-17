@@ -101,6 +101,7 @@ type ReviewPage struct {
 	Total       int
 	HasPrevious bool
 	HasNext     bool
+	Unresolved  int
 }
 
 type DecisionRequest struct {
@@ -112,6 +113,10 @@ func (s *Service) Runs(ctx context.Context, bookID string) ([]store.ProofreadRun
 	return s.store.ProofreadRuns(ctx, bookID)
 }
 
+func (s *Service) Run(ctx context.Context, runID string) (store.ProofreadRunRecord, bool, error) {
+	return s.store.ProofreadRun(ctx, runID)
+}
+
 func (s *Service) Review(ctx context.Context, bookID, runID string, query ReviewQuery) (ReviewPage, bool, error) {
 	run, ok, err := s.store.ProofreadRun(ctx, runID)
 	if err != nil || !ok || run.BookID != bookID {
@@ -120,6 +125,12 @@ func (s *Service) Review(ctx context.Context, bookID, runID string, query Review
 	views, err := s.candidateViews(ctx, run)
 	if err != nil {
 		return ReviewPage{}, false, err
+	}
+	unresolved := 0
+	for _, view := range views {
+		if view.Outcome == "pending" || len(view.ConflictIDs) != 0 {
+			unresolved++
+		}
 	}
 	filter := strings.TrimSpace(query.Filter)
 	if filter != "" && filter != "all" {
@@ -144,8 +155,81 @@ func (s *Service) Review(ctx context.Context, bookID, runID string, query Review
 	end := min(start+pageSize, total)
 	return ReviewPage{
 		Run: run, Candidates: views[start:end], Filter: filter, Page: page, Total: total,
-		HasPrevious: page > 1, HasNext: end < total,
+		HasPrevious: page > 1, HasNext: end < total, Unresolved: unresolved,
 	}, true, nil
+}
+
+type RevisionDecision struct {
+	CandidateID      string `json:"candidate_id"`
+	Outcome          string `json:"outcome"`
+	Replacement      string `json:"replacement"`
+	ExpectedOriginal string `json:"expected_original"`
+	LocationJSON     string `json:"location_json"`
+}
+
+type RevisionParameters struct {
+	RunID         string             `json:"run_id"`
+	SourceFileID  string             `json:"source_file_id"`
+	SourceSHA256  string             `json:"source_sha256"`
+	Format        string             `json:"format"`
+	EngineVersion string             `json:"engine_version"`
+	HasUnresolved bool               `json:"has_unresolved"`
+	Decisions     []RevisionDecision `json:"decisions"`
+}
+
+func (s *Service) CreateRevision(ctx context.Context, runID string, confirmUnresolved bool) (task.Task, error) {
+	run, ok, err := s.store.ProofreadRun(ctx, runID)
+	if err != nil {
+		return task.Task{}, err
+	}
+	if !ok || run.Status != "completed" {
+		return task.Task{}, fmt.Errorf("completed proofread run not found")
+	}
+	views, err := s.candidateViews(ctx, run)
+	if err != nil {
+		return task.Task{}, err
+	}
+	parameters := RevisionParameters{
+		RunID: run.ID, SourceFileID: run.SourceFileID, SourceSHA256: run.SourceSHA256, Format: run.Format, EngineVersion: run.EngineVersion,
+		Decisions: make([]RevisionDecision, 0, len(views)),
+	}
+	for _, view := range views {
+		outcome := "keep_pending"
+		replacement := ""
+		switch {
+		case len(view.ConflictIDs) != 0:
+			outcome = "keep_conflict"
+			parameters.HasUnresolved = true
+		case view.Outcome == "automatic":
+			outcome, replacement = "apply_automatic", view.Replacement
+		case view.Outcome == "accepted":
+			outcome, replacement = "apply_accepted", view.Replacement
+		case view.Outcome == "modified":
+			outcome, replacement = "apply_modified", view.Replacement
+		case view.Outcome == "rejected":
+			outcome = "keep_rejected"
+		default:
+			parameters.HasUnresolved = true
+		}
+		parameters.Decisions = append(parameters.Decisions, RevisionDecision{
+			CandidateID: view.Candidate.ID, Outcome: outcome, Replacement: replacement,
+			ExpectedOriginal: view.Candidate.ExpectedOriginal, LocationJSON: view.Candidate.LocationJSON,
+		})
+	}
+	if parameters.HasUnresolved && !confirmUnresolved {
+		return task.Task{}, fmt.Errorf("unresolved candidates require explicit confirmation; their source text will be kept")
+	}
+	encoded, err := json.Marshal(parameters)
+	if err != nil {
+		return task.Task{}, err
+	}
+	taskType := task.BuildRevisionTXT
+	if run.Format == "epub" {
+		taskType = task.BuildRevisionEPUB
+	}
+	return s.tasks.Create(ctx, task.CreateRequest{
+		BookID: run.BookID, Type: taskType, InputFileID: run.SourceFileID, ParametersJSON: string(encoded), CreatedAt: s.now(),
+	})
 }
 
 func (s *Service) Decide(ctx context.Context, candidateID string, request DecisionRequest) (store.ProofreadRunRecord, error) {

@@ -164,6 +164,9 @@ func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.P
 	if _, err := e.python(ctx, runtime, "verify", "--state-dir", stateDir); err != nil {
 		return engineFailure(err)
 	}
+	if err := copyTree(runtime.Root, filepath.Join(stateDir, "engine")); err != nil {
+		return engineFailure(err)
+	}
 	candidates, err := e.databaseCandidates(stateDir)
 	if err != nil {
 		return engineFailure(err)

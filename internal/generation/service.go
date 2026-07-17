@@ -42,7 +42,7 @@ func (s *Service) PreviewTXT(ctx context.Context, bookID string, opts Options) (
 	if err != nil {
 		return converter.TXTAnalysis{}, err
 	}
-	params, err := s.parameters(ctx, book, "epub", opts)
+	params, err := s.parameters(ctx, book.Original, "epub", opts)
 	if err != nil {
 		return converter.TXTAnalysis{}, err
 	}
@@ -55,9 +55,10 @@ func (s *Service) PreviewTXT(ctx context.Context, bookID string, opts Options) (
 }
 
 type CreateRequest struct {
-	BookID  string
-	Formats []string
-	Options Options
+	BookID      string
+	InputFileID string
+	Formats     []string
+	Options     Options
 }
 
 type Parameters struct {
@@ -100,12 +101,22 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 	if !ok {
 		return nil, fmt.Errorf("book %q not found", req.BookID)
 	}
-	if book.SourceFormat == "epub" {
-		detail, _, err := s.library.GetBookDetail(ctx, book.ID)
+	input := book.Original
+	if strings.TrimSpace(req.InputFileID) != "" {
+		input, ok, err = s.library.GetFile(ctx, req.InputFileID)
 		if err != nil {
 			return nil, err
 		}
-		if detail.Compatibility == nil || detail.Compatibility.Status != "passed" {
+		if !ok || input.BookID != book.ID || (input.Role != "original" && input.Role != "revision") {
+			return nil, fmt.Errorf("generation input file not found")
+		}
+	}
+	if input.Format == "epub" {
+		report, found, err := s.library.CompatibilityForFile(ctx, input.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !found || report.Status != "passed" {
 			return nil, fmt.Errorf("epub_incompatible: EPUB compatibility report did not pass")
 		}
 	}
@@ -124,13 +135,13 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 		if format != "epub" && format != "azw3" {
 			return nil, fmt.Errorf("unsupported output format %q", format)
 		}
-		if book.SourceFormat == "epub" && format != "azw3" {
+		if input.Format == "epub" && format != "azw3" {
 			return nil, fmt.Errorf("EPUB input can only generate AZW3")
 		}
-		if book.SourceFormat != "txt" && book.SourceFormat != "epub" {
-			return nil, fmt.Errorf("%s files are not convertible", book.SourceFormat)
+		if input.Format != "txt" && input.Format != "epub" {
+			return nil, fmt.Errorf("%s files are not convertible", input.Format)
 		}
-		parameters, err := s.parameters(ctx, book, format, req.Options)
+		parameters, err := s.parameters(ctx, input, format, req.Options)
 		if err != nil {
 			return nil, err
 		}
@@ -142,12 +153,12 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 		if format == "azw3" {
 			taskType = task.GenerateAZW3
 		}
-		requests = append(requests, task.CreateRequest{BookID: book.ID, Type: taskType, InputFileID: book.Original.ID, ParametersJSON: string(encoded), CreatedAt: createdAt})
+		requests = append(requests, task.CreateRequest{BookID: book.ID, Type: taskType, InputFileID: input.ID, ParametersJSON: string(encoded), CreatedAt: createdAt})
 	}
 	return s.tasks.CreateMany(ctx, requests)
 }
 
-func (s *Service) parameters(ctx context.Context, book library.Book, format string, opts Options) (Parameters, error) {
+func (s *Service) parameters(ctx context.Context, input library.File, format string, opts Options) (Parameters, error) {
 	cfg := s.base
 	if s.defaults != nil {
 		var err error
@@ -156,7 +167,7 @@ func (s *Service) parameters(ctx context.Context, book library.Book, format stri
 			return Parameters{}, err
 		}
 	}
-	cfg.Metadata.Title = firstNonBlank(opts.Title, strings.TrimSuffix(book.Original.DisplayName, filepath.Ext(book.Original.DisplayName)))
+	cfg.Metadata.Title = firstNonBlank(opts.Title, strings.TrimSuffix(input.DisplayName, filepath.Ext(input.DisplayName)))
 	if strings.TrimSpace(opts.Author) != "" {
 		cfg.Metadata.Author = strings.TrimSpace(opts.Author)
 	}
@@ -195,11 +206,11 @@ func (s *Service) parameters(ctx context.Context, book library.Book, format stri
 	}
 	txtconfig.Normalize(&cfg)
 	metadata := cfg.Metadata
-	if book.SourceFormat == "epub" {
+	if input.Format == "epub" {
 		metadata.Language = ""
 	}
 	return Parameters{
-		InputFormat: book.SourceFormat, OutputFormat: format, ExpectedSHA256: book.Original.SHA256,
+		InputFormat: input.Format, OutputFormat: format, ExpectedSHA256: input.SHA256,
 		Metadata: metadata, TXT: cfg.TXT, Style: cfg.Style, Cover: cfg.Output.Cover,
 		DefaultLanguage: cfg.Metadata.Language,
 	}, nil

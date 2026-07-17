@@ -38,6 +38,7 @@ func (h Handler) WebMux() http.Handler {
 	mux.HandleFunc("/books", h.handleBooks)
 	mux.HandleFunc("/books/", h.handleBookRoute)
 	mux.HandleFunc("/candidates/", h.handleCandidateRoute)
+	mux.HandleFunc("/proofreads/", h.handleProofreadRoute)
 	mux.HandleFunc("/files/", h.handleFileRoute)
 	mux.HandleFunc("/tasks", h.handleTasks)
 	mux.HandleFunc("/tasks/", h.handleTaskRoute)
@@ -184,6 +185,38 @@ func (h Handler) handleCandidateRoute(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/books/"+run.BookID+"/proofreads/"+run.ID+"?message="+urlMessage(message), http.StatusSeeOther)
 }
 
+func (h Handler) handleProofreadRoute(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/proofreads/")
+	if r.Method != http.MethodPost || !strings.HasSuffix(path, "/revisions") {
+		http.NotFound(w, r)
+		return
+	}
+	runID := strings.TrimSuffix(path, "/revisions")
+	if runID == "" || strings.Contains(runID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if h.Proofreads == nil {
+		http.Error(w, "proofreading service is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	created, err := h.Proofreads.CreateRevision(r.Context(), runID, r.Form.Get("confirm_unresolved") == "1")
+	if err != nil {
+		run, ok, runErr := h.Proofreads.Run(r.Context(), runID)
+		if runErr == nil && ok {
+			http.Redirect(w, r, "/books/"+run.BookID+"/proofreads/"+runID+"?message="+urlMessage("revision failed: "+err.Error()), http.StatusSeeOther)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/books/"+created.BookID+"?message=revision+task+queued", http.StatusSeeOther)
+}
+
 func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -321,8 +354,29 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 		}
 	}
 	files := make([]fileView, 0, len(detail.Files))
+	var generationInputs []generationInputView
 	for _, file := range detail.Files {
-		files = append(files, newFileView(file))
+		view := newFileView(file)
+		if file.Role != "original" && file.Role != "revision" {
+			files = append(files, view)
+			continue
+		}
+		compatible := file.Format == "txt"
+		if file.Format == "epub" {
+			report, found, reportErr := h.Library.CompatibilityForFile(r.Context(), file.ID)
+			if reportErr != nil {
+				http.Error(w, reportErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			compatible = found && report.Status == "passed"
+			if found {
+				view.CompatibilityStatus = report.Status
+			}
+		}
+		files = append(files, view)
+		if compatible {
+			generationInputs = append(generationInputs, generationInputView{ID: file.ID, Name: file.DisplayName, Role: file.Role, HasUnresolved: file.HasUnresolved})
+		}
 	}
 	data := bookPageData{
 		Book: recordView{
@@ -331,8 +385,8 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 			InputFormat:  detail.Book.SourceFormat,
 			TitleDefault: strings.TrimSuffix(detail.Book.Original.DisplayName, filepath.Ext(detail.Book.Original.DisplayName)),
 		},
-		Files: files, Tasks: taskViews(tasks), ProofreadRuns: runs, Message: r.URL.Query().Get("message"), Compatibility: detail.Compatibility,
-		CanGenerate: detail.Book.SourceFormat == "txt" || (detail.Compatibility != nil && detail.Compatibility.Status == "passed"),
+		Files: files, Tasks: taskViews(tasks), ProofreadRuns: runs, GenerationInputs: generationInputs, Message: r.URL.Query().Get("message"), Compatibility: detail.Compatibility,
+		CanGenerate: len(generationInputs) != 0,
 	}
 	if h.Settings != nil {
 		defaults, err := h.Settings.Current(r.Context())
@@ -364,7 +418,7 @@ func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request, b
 	data := proofreadPageData{
 		BookID: bookID, Run: storeProofreadRunView{ID: page.Run.ID, Format: strings.ToUpper(page.Run.Format), Model: page.Run.Model, CompletedAt: page.Run.CompletedAt.Format("2006-01-02 15:04")},
 		Candidates: page.Candidates, Filter: page.Filter, Page: page.Page, PreviousPage: page.Page - 1, NextPage: page.Page + 1,
-		HasPrevious: page.HasPrevious, HasNext: page.HasNext, Total: page.Total, Message: r.URL.Query().Get("message"),
+		HasPrevious: page.HasPrevious, HasNext: page.HasNext, Total: page.Total, Unresolved: page.Unresolved, Message: r.URL.Query().Get("message"),
 	}
 	if err := proofreadTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -385,7 +439,7 @@ func (h Handler) handleGenerate(w http.ResponseWriter, r *http.Request, bookID s
 		formats = []string{"azw3"}
 	}
 	_, err := h.Generation.Create(r.Context(), generation.CreateRequest{
-		BookID: bookID, Formats: formats,
+		BookID: bookID, InputFileID: r.Form.Get("input_file_id"), Formats: formats,
 		Options: generationOptionsFromForm(r),
 	})
 	if err != nil {
@@ -714,14 +768,15 @@ func displayFileViews(record library.Book) []fileView {
 
 func newFileView(file library.File) fileView {
 	return fileView{
-		ID:        file.ID,
-		Kind:      file.Role,
-		Name:      file.DisplayName,
-		Format:    strings.ToUpper(file.Format),
-		Size:      humanSize(file.Size),
-		URL:       downloadURL(file.ID),
-		CreatedAt: file.CreatedAt.Format("2006-01-02 15:04"),
-		CanDelete: file.Role != "original",
+		ID:         file.ID,
+		Kind:       file.Role,
+		Name:       file.DisplayName,
+		Format:     strings.ToUpper(file.Format),
+		Size:       humanSize(file.Size),
+		URL:        downloadURL(file.ID),
+		CreatedAt:  file.CreatedAt.Format("2006-01-02 15:04"),
+		CanDelete:  file.Role != "original",
+		Unresolved: file.HasUnresolved,
 	}
 }
 
@@ -781,14 +836,22 @@ type kindlePageData struct {
 }
 
 type bookPageData struct {
-	Book          recordView
-	Files         []fileView
-	Tasks         []taskView
-	ProofreadRuns []storeProofreadRunView
-	Message       string
-	Compatibility *library.CompatibilityReport
-	CanGenerate   bool
-	Defaults      appsettings.Values
+	Book             recordView
+	Files            []fileView
+	Tasks            []taskView
+	ProofreadRuns    []storeProofreadRunView
+	GenerationInputs []generationInputView
+	Message          string
+	Compatibility    *library.CompatibilityReport
+	CanGenerate      bool
+	Defaults         appsettings.Values
+}
+
+type generationInputView struct {
+	ID            string
+	Name          string
+	Role          string
+	HasUnresolved bool
 }
 
 type storeProofreadRunView struct {
@@ -809,6 +872,7 @@ type proofreadPageData struct {
 	HasPrevious  bool
 	HasNext      bool
 	Total        int
+	Unresolved   int
 	Message      string
 }
 
@@ -850,14 +914,16 @@ type recordView struct {
 }
 
 type fileView struct {
-	ID        string
-	Kind      string
-	Name      string
-	Format    string
-	Size      string
-	URL       string
-	CreatedAt string
-	CanDelete bool
+	ID                  string
+	Kind                string
+	Name                string
+	Format              string
+	Size                string
+	URL                 string
+	CreatedAt           string
+	CanDelete           bool
+	Unresolved          bool
+	CompatibilityStatus string
 }
 
 type taskView struct {
@@ -992,6 +1058,7 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
   {{if .CanGenerate}}<fieldset>
     <legend>Generate</legend>
     <form method="post" action="/books/{{.Book.ID}}/generate">
+      <label>Input file <select name="input_file_id">{{range .GenerationInputs}}<option value="{{.ID}}">{{.Name}} ({{.Role}}{{if .HasUnresolved}}, unresolved locations kept{{end}})</option>{{end}}</select></label>
       <label><input type="checkbox" name="format" value="azw3" checked> AZW3</label>
       {{if eq .Book.InputFormat "txt"}}<label><input type="checkbox" name="format" value="epub"> EPUB</label>{{end}}
       <label>Title <input type="text" name="title" value="{{.Book.TitleDefault}}"></label>
@@ -1033,7 +1100,7 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
 
   <h2>Files</h2>
   <table><thead><tr><th>Name</th><th>Role</th><th>Format</th><th>Size</th><th>Created</th></tr></thead><tbody>
-  {{range .Files}}<tr><td><a href="{{.URL}}">{{.Name}}</a>{{if .CanDelete}} <form class="inline" method="post" action="/files/{{.ID}}/delete"><button type="submit">Delete</button></form>{{end}}</td><td>{{.Kind}}</td><td>{{.Format}}</td><td>{{.Size}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="5">No files.</td></tr>{{end}}
+  {{range .Files}}<tr><td><a href="{{.URL}}">{{.Name}}</a>{{if .Unresolved}} <span class="error">(contains unresolved source locations)</span>{{end}}{{if .CompatibilityStatus}} <span class="muted">(EPUB compatibility: {{.CompatibilityStatus}})</span>{{end}}{{if .CanDelete}} <form class="inline" method="post" action="/files/{{.ID}}/delete"><button type="submit">Delete</button></form>{{end}}</td><td>{{.Kind}}</td><td>{{.Format}}</td><td>{{.Size}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="5">No files.</td></tr>{{end}}
   </tbody></table>
 
   <h2>Tasks</h2>
@@ -1091,6 +1158,9 @@ form.inline { display: inline; } input[type=text] { min-width: 280px; padding: 5
 <option value="conflict" {{if eq .Filter "conflict"}}selected{{end}}>Conflicts</option>
 </select></label><button type="submit">Apply</button></form>
 <p class="muted">{{.Total}} candidate(s), page {{.Page}}</p>
+<form method="post" action="/proofreads/{{.Run.ID}}/revisions">
+{{if .Unresolved}}<p><strong>{{.Unresolved}} unresolved candidate(s)</strong> will keep their exact source text.</p><label><input type="checkbox" name="confirm_unresolved" value="1" required> Generate anyway and keep every unresolved location unchanged.</label>{{end}}
+<button type="submit">Queue immutable revised file, report, and audit</button></form>
 {{range .Candidates}}<section class="candidate" id="{{.Candidate.ID}}">
 <h2>{{.Candidate.ExpectedOriginal}} → {{.Candidate.FirstReplacement}}</h2>
 <p><strong>Status:</strong> <span class="{{if eq .Outcome "automatic"}}automatic{{end}}">{{.Outcome}}</span> · <strong>Category:</strong> {{.Candidate.Category}} · <strong>Location:</strong> {{.Location}}</p>

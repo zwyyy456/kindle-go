@@ -37,6 +37,7 @@ type File struct {
 	Size           int64
 	SourceFileID   string
 	TaskID         string
+	ProofreadRunID string
 	ParametersJSON string
 	HasUnresolved  bool
 	CreatedAt      time.Time
@@ -67,13 +68,13 @@ func (s *Store) FilesForBook(ctx context.Context, bookID string) ([]File, error)
 	return files, rows.Err()
 }
 
-const fileSelect = `SELECT id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, COALESCE(source_file_id, ''), COALESCE(task_id, ''), COALESCE(parameters_json, ''), has_unresolved, created_at FROM files`
+const fileSelect = `SELECT id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, COALESCE(source_file_id, ''), COALESCE(task_id, ''), COALESCE(proofread_run_id, ''), COALESCE(parameters_json, ''), has_unresolved, created_at FROM files`
 
 func scanFile(row rowScanner) (File, error) {
 	var file File
 	var unresolved int
 	var created string
-	if err := row.Scan(&file.ID, &file.BookID, &file.Role, &file.State, &file.Format, &file.DisplayName, &file.RelPath, &file.SHA256, &file.Size, &file.SourceFileID, &file.TaskID, &file.ParametersJSON, &unresolved, &created); err != nil {
+	if err := row.Scan(&file.ID, &file.BookID, &file.Role, &file.State, &file.Format, &file.DisplayName, &file.RelPath, &file.SHA256, &file.Size, &file.SourceFileID, &file.TaskID, &file.ProofreadRunID, &file.ParametersJSON, &unresolved, &created); err != nil {
 		return File{}, err
 	}
 	file.HasUnresolved = unresolved != 0

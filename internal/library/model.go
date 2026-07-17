@@ -25,6 +25,7 @@ type File struct {
 	Size           int64
 	SourceFileID   string
 	TaskID         string
+	ProofreadRunID string
 	ParametersJSON string
 	HasUnresolved  bool
 	CreatedAt      time.Time
