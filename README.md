@@ -185,6 +185,11 @@ at the same time. A book may use 1–8 concurrent Codex subprocesses internally.
 state: cancellation, failure, or process interruption exposes no partial result, and Retry creates
 a new task that starts every batch from the beginning.
 
+Each task keeps a short persisted event timeline for queued, running, progress, cancellation,
+failure, recovery, and completion transitions. The task detail page displays that timeline. Server
+logs contain task identifiers, stages, durations, and stable error codes, but do not log book text,
+complete prompts, model responses, or task parameter snapshots.
+
 The proofreading workflow is:
 
 1. Start TXT or EPUB proofreading from the book page.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,33 @@ func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 	handler.WebMux().ServeHTTP(old, httptest.NewRequest(http.MethodPost, "/upload", nil))
 	if old.Code != http.StatusNotFound {
 		t.Fatalf("legacy upload status = %d", old.Code)
+	}
+}
+
+func TestImportAndDownloadLogsContainOnlyFileMetadata(t *testing.T) {
+	handler, service, _, _ := newHTTPTestHandler(t)
+	var output bytes.Buffer
+	handler.Logger = log.New(&output, "", 0)
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, multipartRequest(t, "/books/import", "private-path-name.txt", "sensitive正文"))
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("import status = %d", response.Code)
+	}
+	books, err := service.AllBooks(context.Background())
+	if err != nil || len(books) != 1 {
+		t.Fatalf("books = %#v, %v", books, err)
+	}
+	download := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/files/"+books[0].Original.ID+"/download", nil))
+	if download.Code != http.StatusOK {
+		t.Fatalf("download status = %d", download.Code)
+	}
+	logged := output.String()
+	if !strings.Contains(logged, "file event=import") || !strings.Contains(logged, "file event=download") || !strings.Contains(logged, "file_id="+books[0].Original.ID) || !strings.Contains(logged, "size_bytes=") {
+		t.Fatalf("file logs = %q", logged)
+	}
+	if strings.Contains(logged, "private-path-name") || strings.Contains(logged, "sensitive正文") {
+		t.Fatalf("file logs exposed name or content: %q", logged)
 	}
 }
 

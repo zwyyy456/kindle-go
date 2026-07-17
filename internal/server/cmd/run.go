@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
@@ -95,6 +96,9 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		Tasks:      taskService,
 		Settings:   settingsService,
 		Proofreads: proofreadService,
+	}
+	if stdout != nil {
+		handler.Logger = log.New(stdout, "", log.LstdFlags)
 	}
 	srv := server.Server{
 		Config: server.Config{

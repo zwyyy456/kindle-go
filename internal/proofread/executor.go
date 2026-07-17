@@ -422,7 +422,7 @@ func modelFailure(err error) error {
 	}
 	var codexErr *CodexError
 	if errors.As(err, &codexErr) {
-		return &task.ExecutionError{Code: codexErr.Code, Message: codexErr.Message, Err: err}
+		return &task.ExecutionError{Code: codexErr.Code, Message: codexErr.Message, Diagnostic: codexErr.Stderr, Err: err}
 	}
 	return &task.ExecutionError{Code: "codex_unavailable", Err: err}
 }

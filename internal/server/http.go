@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -32,6 +33,7 @@ type Handler struct {
 	Diagnostics func(context.Context) proofread.DependencyDiagnostics
 	CheckCodex  func(context.Context) (string, error)
 	Proofreads  *proofread.Service
+	Logger      *log.Logger
 }
 
 func (h Handler) WebMux() http.Handler {
@@ -303,6 +305,7 @@ func (h Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/books?duplicate="+url.QueryEscape(result.DuplicateToken), http.StatusSeeOther)
 		return
 	}
+	h.logFile("import", result.Book.Original)
 	http.Redirect(w, r, "/books/"+result.Book.ID+"?message=imported", http.StatusSeeOther)
 }
 
@@ -323,6 +326,9 @@ func (h Handler) handleImportConfirm(w http.ResponseWriter, r *http.Request, tok
 	if book.ID == "" {
 		http.Redirect(w, r, "/books?message=import+canceled", http.StatusSeeOther)
 		return
+	}
+	if r.Form.Get("action") == "import" {
+		h.logFile("import", book.Original)
 	}
 	http.Redirect(w, r, "/books/"+book.ID, http.StatusSeeOther)
 }
@@ -694,7 +700,15 @@ func (h Handler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", file.DisplayName))
+	h.logFile("download", file)
 	http.ServeFile(w, r, path)
+}
+
+func (h Handler) logFile(event string, file library.File) {
+	if h.Logger == nil {
+		return
+	}
+	h.Logger.Printf("file event=%s file_id=%s book_id=%s role=%s format=%s size_bytes=%d", event, file.ID, file.BookID, file.Role, file.Format, file.Size)
 }
 
 func (h Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -1211,7 +1225,7 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
     const active = [...document.querySelectorAll('[data-task-id]')].filter(row => ['queued','running'].includes(row.dataset.taskStatus));
     if (active.length) setTimeout(async () => {
       const changed = await Promise.all(active.map(async row => {
-        const result = await fetch('/tasks/' + row.dataset.taskId + '/status');
+        const result = await fetch('/tasks/' + row.dataset.taskId + '.json');
         if (!result.ok) return false;
         const task = await result.json();
         return task.status !== row.dataset.taskStatus;

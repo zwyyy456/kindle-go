@@ -172,17 +172,20 @@ func TestRunnerLogsTaskMetadataWithoutParametersOrBookContent(t *testing.T) {
 	}
 	var output bytes.Buffer
 	runner := NewRunner(service, map[Type]Executor{GenerateEPUB: executorFunc(func(ctx context.Context, _ Task, progress ProgressReporter) error {
-		return progress.Report(ctx, "write", 1, 1)
+		if err := progress.Report(ctx, "write", 1, 1); err != nil {
+			return err
+		}
+		return &ExecutionError{Code: "conversion_failed", Message: "safe failure", Diagnostic: "bounded stderr"}
 	})})
 	runner.SetLogWriter(&output)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- runner.Run(ctx) }()
-	waitStatus(t, service, value.ID, Completed)
+	waitStatus(t, service, value.ID, Failed)
 	cancel()
 	waitRunner(t, done)
 	logged := output.String()
-	if !strings.Contains(logged, "task_id="+value.ID) || !strings.Contains(logged, "book_id="+bookID) || !strings.Contains(logged, "stage=write") {
+	if !strings.Contains(logged, "task_id="+value.ID) || !strings.Contains(logged, "book_id="+bookID) || !strings.Contains(logged, "stage=write") || !strings.Contains(logged, `diagnostic="bounded stderr"`) {
 		t.Fatalf("task log = %q", logged)
 	}
 	if strings.Contains(logged, "sensitive正文") || strings.Contains(logged, value.ParametersJSON) {

@@ -317,7 +317,7 @@ PRAGMA busy_timeout = 5000;
 | `schema_migrations` | `version`, `applied_at` | 数据库版本与幂等迁移 |
 | `runtime_lock` | `instance_id`, `pid`, `heartbeat_at` | 阻止同一书库被两个 `serve` worker 同时执行 |
 | `settings` | `key`, `value_json`, `updated_at` | Web 全局设置覆盖值 |
-| `books` | `id`, `display_name`, `source_format`, `state`, `imported_at`, `legacy_last_error` | 书籍聚合根；`state` 为 `active/deleting`；`legacy_last_error` 仅用于旧同步界面迁移期间兼容，异步任务界面接管后删除 |
+| `books` | `id`, `display_name`, `source_format`, `state`, `imported_at`, `legacy_last_error` | 书籍聚合根；`state` 为 `active/deleting`；`legacy_last_error` 只读保留旧书库最后一次同步错误，供迁移后提示，不再写入 |
 | `files` | `id`, `book_id`, `role`, `state`, `format`, `display_name`, `rel_path`, `sha256`, `size_bytes`, `source_file_id`, `task_id`, `proofread_run_id`, `parameters_json`, `has_unresolved`, `created_at` | 原文件、修订文件、产物、报告和审计文件 |
 | `tasks` | `id`, `book_id`, `type`, `status`, `queue_seq`, `input_file_id`, `retry_of_task_id`, `parameters_json`, `stage`, `progress_current`, `progress_total`, `error_code`, `error_message`, `created_at`, `started_at`, `finished_at` | 单一持久化任务队列与进度 |
 | `task_events` | `task_id`, `seq`, `level`, `stage`, `message`, `created_at` | 面向用户和诊断的阶段事件，不保存整段正文 |
@@ -359,7 +359,7 @@ PRAGMA busy_timeout = 5000;
 2. 验证原文件存在，重新计算大小、格式和 SHA-256。
 3. 每条旧记录创建一本书和一个 `original` 文件记录，继续引用旧文件路径，不移动字节。
 4. 旧 `Output` 如果存在，创建一个 `artifact` 文件记录，参数标记为 `{"legacy_import":true}`。
-5. 旧 `LastError` 先写入过渡兼容字段，待异步任务界面接管旧同步界面时转换为迁移说明事件并删除该字段；迁移过程不伪造任务。
+5. 旧 `LastError` 写入只读迁移兼容字段并继续展示；新流程的错误只写任务记录和任务事件，迁移过程不伪造任务。
 6. 全部记录在单个 SQLite 事务中提交；任一记录失败则整个迁移回滚。
 7. 成功后写入 migration marker，但保留原 `index.json`、`originals/` 和 `converted/`，不删除或覆盖。
 
@@ -616,17 +616,11 @@ executor：
 
 ### 8.12 设置服务
 
-数据库 keys：
+数据库使用单个版本化的 `web.global_defaults` JSON 快照保存 metadata、TXT 清理与 style 默认值、Kindle EPUB 展示开关，以及 proofread model、batch size 和 concurrency。Kindle EPUB 默认关闭；model 默认空，表示 Codex 默认模型；concurrency 默认 3，限制为 1–8。
 
-- `txt.defaults`：metadata、TXT 清理和 style 默认值。
-- `kindle.show_epub`：默认 `false`。
-- `proofread.codex_path`：默认 `codex`。
-- `proofread.model`：默认空，表示 Codex 默认模型。
-- `proofread.batch_size`：默认沿用脚本推荐值。
-- `proofread.concurrency`：默认 3，限制为 1–8。
-- `proofread.python_path`：默认 `python3`。
+第一次打开书库时用配置文件的 TXT 默认值初始化 `web.global_defaults`。之后 Web 保存的数据库值优先。CLI `txt2epub` 继续只读取配置文件，不受 Web 数据库设置影响。
 
-第一次打开书库时用配置文件的 TXT 默认值初始化 `txt.defaults`。之后 Web 保存的数据库值优先。CLI `txt2epub` 继续只读取配置文件，不受 Web 数据库设置影响。
+校对固定从服务进程的 `PATH` 解析 `codex` 和 `python3`；v1 不保存可执行文件路径设置。设置页只读展示实际解析路径、版本和 Codex 非交互 flags。该约束也在 README 中说明。
 
 监听地址和书库目录在设置页只展示有效值、来源和“重启后修改”的配置说明；v1 不从 Web 重写配置文件或在线迁移书库目录。
 
@@ -650,6 +644,7 @@ executor：
 | POST | `/files/{id}/delete` | 删除允许删除的历史产物 |
 | GET | `/files/{id}/download` | 下载 ready 文件 |
 | GET | `/tasks` | 全局任务页 |
+| GET | `/tasks/{id}` | 单个任务状态和持久化事件时间线 |
 | GET | `/tasks/{id}.json` | 轮询状态、阶段、进度和最近错误 |
 | POST | `/tasks/{id}/cancel` | 取消 queued/running 任务 |
 | POST | `/tasks/{id}/retry` | 为 failed/canceled 任务创建全新任务 |
@@ -664,13 +659,13 @@ executor：
 只注册：
 
 - `GET /`：最新 AZW3 和可选最新 EPUB。
-- `GET /download/{file-id}`：仅允许下载当前 Kindle projection 中可见的 ready artifact。
+- `GET /files/{file-id}/download`：仅允许下载当前 Kindle projection 中可见的 ready artifact。
 
 Kindle mux 不注册上传、任务、设置、删除、原文件或历史产物路由。
 
 ### 9.3 模板与轮询
 
-- 模板使用 `go:embed`，启动时 `template.ParseFS` 并在测试中验证全部模板可解析。
+- v1 模板随 Go 二进制编译并通过 `template.Must` 在启动前完成解析；不依赖运行目录中的外部模板文件。
 - 桌面任务页面每 2 秒轮询 `/tasks/{id}.json`，任务进入终态后停止。
 - JavaScript 失败时页面仍可手动刷新完成全部操作。
 - 错误页显示用户可理解的阶段和原因，不返回内部绝对路径或完整 Codex stderr。
@@ -951,7 +946,6 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 - `upload_too_large`。
 - `epub_expanded_too_large`。
 - `unsupported_format`。
-- `duplicate_source`。
 - `source_hash_mismatch`。
 - `epub_incompatible`。
 - `task_process_interrupted`。
@@ -963,6 +957,8 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 - `proofread_engine_failed`。
 - `candidate_conflict`。
 - `book_has_active_tasks`。
+
+重复 SHA 不是失败错误：导入服务返回 duplicate projection 和一次性确认 token，由用户选择打开已有书籍或仍然导入。
 
 ### 13.2 日志边界
 
@@ -976,7 +972,7 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 
 - 数据库版本、WAL、书库可写性和剩余磁盘空间。
 - 当前监听地址和来源（默认、配置文件或 CLI）。
-- `python3`、Codex CLI 和可选 SVG converter 路径与版本。
+- `python3` 和 Codex CLI 的实际解析路径与版本；不为不兼容 EPUB 提供 SVG converter 配置或产品内修复路径。
 - Codex 所需非交互 flags 是否可用。
 - 当前生成/校对执行槽状态，以及单一任务表中的等待数量。
 
@@ -991,7 +987,7 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 
 ### 14.2 升级
 
-- App 启动先取得实例锁，再运行 schema migration 和旧索引导入，最后启动 worker 与 HTTP。
+- App 先打开 SQLite 并运行向前 schema migration，再取得实例锁；取得锁后才运行旧索引导入、pending/deleting 收敛并启动 worker 与 HTTP。
 - migration 失败时不启动 HTTP/worker，并打印具体版本和错误。
 - 旧文件不移动，降低首次升级风险。
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -178,12 +179,12 @@ func (r *Runner) execute(parent context.Context, value Task) {
 	executor := r.executors[value.Type]
 	if executor == nil {
 		_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Failed), "executor_not_found", fmt.Sprintf("no executor registered for %s", value.Type), r.service.now())
-		r.logTask(value, "finished", "failed", "executor_not_found", current.StartedAt)
+		r.logTask(value, "finished", "failed", "executor_not_found", "", current.StartedAt)
 		return
 	}
-	r.logTask(value, "started", "prepare", "", current.StartedAt)
+	r.logTask(value, "started", "prepare", "", "", current.StartedAt)
 	reporter := progressReporter{store: r.service.store, taskID: value.ID, report: func(stage string) {
-		r.logTask(value, "progress", stage, "", current.StartedAt)
+		r.logTask(value, "progress", stage, "", "", current.StartedAt)
 	}}
 	err = executeSafely(ctx, executor, value, reporter)
 	latest, ok, getErr := r.service.Get(context.Background(), value.ID)
@@ -191,7 +192,7 @@ func (r *Runner) execute(parent context.Context, value Task) {
 		return
 	}
 	if latest.Status == Canceled {
-		r.logTask(value, "finished", "canceled", "task_canceled", current.StartedAt)
+		r.logTask(value, "finished", "canceled", "task_canceled", "", current.StartedAt)
 		return
 	}
 	if parent.Err() != nil {
@@ -199,22 +200,24 @@ func (r *Runner) execute(parent context.Context, value Task) {
 	}
 	if err == nil {
 		_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Completed), "", "", r.service.now())
-		r.logTask(value, "finished", "completed", "", current.StartedAt)
+		r.logTask(value, "finished", "completed", "", "", current.StartedAt)
 		return
 	}
 	code := "executor_failed"
 	message := err.Error()
+	diagnostic := ""
 	var executionErr *ExecutionError
 	if errors.As(err, &executionErr) {
 		if executionErr.Code != "" {
 			code = executionErr.Code
 		}
+		diagnostic = executionErr.Diagnostic
 	}
 	_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Failed), code, message, r.service.now())
-	r.logTask(value, "finished", "failed", code, current.StartedAt)
+	r.logTask(value, "finished", "failed", code, diagnostic, current.StartedAt)
 }
 
-func (r *Runner) logTask(value Task, event, stage, code string, startedAt time.Time) {
+func (r *Runner) logTask(value Task, event, stage, code, diagnostic string, startedAt time.Time) {
 	if r.logWriter == nil {
 		return
 	}
@@ -227,6 +230,9 @@ func (r *Runner) logTask(value Task, event, stage, code string, startedAt time.T
 	fmt.Fprintf(r.logWriter, "task event=%s task_id=%s book_id=%s type=%s stage=%s duration=%s", event, value.ID, value.BookID, value.Type, stage, duration)
 	if code != "" {
 		fmt.Fprintf(r.logWriter, " error_code=%s", code)
+	}
+	if strings.TrimSpace(diagnostic) != "" {
+		fmt.Fprintf(r.logWriter, " diagnostic=%q", diagnostic)
 	}
 	fmt.Fprintln(r.logWriter)
 }

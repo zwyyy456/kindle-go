@@ -59,9 +59,10 @@ type CreateRequest struct {
 }
 
 type ExecutionError struct {
-	Code    string
-	Message string
-	Err     error
+	Code       string
+	Message    string
+	Diagnostic string
+	Err        error
 }
 
 func (e *ExecutionError) Error() string {
