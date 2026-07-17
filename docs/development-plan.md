@@ -924,6 +924,8 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 - HTTP 集成：`httptest.Server` 覆盖 PRG、路由权限、文件下载和 Kindle mux。
 - 人工验收：真实 Codex 小样本、目标 Kindle 浏览器和可选 Calibre 工具。
 
+真实 Codex 的 TXT/EPUB 小样本使用 `KINDLE_GO_CONFIRM_REAL_CODEX=1 tools/test-real-codex.sh`。脚本只发送仓库内构造的合成内容，并验证成功 run、修订文件、报告、审计以及修订 EPUB 兼容性；未显式设置确认变量时必须在任何模型调用前退出。
+
 ### 12.3 必须新增的回归测试
 
 - 任务完成与取消竞争。

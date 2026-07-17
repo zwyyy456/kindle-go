@@ -215,3 +215,12 @@ migration.
 Before a release, run `tools/test.sh`. The remaining environment checks are manual: complete one
 real Codex TXT run, one real Codex EPUB run, and verify Chinese book browsing plus AZW3 download on
 the target Kindle. Optional Calibre validation remains opt-in as described in Testing.
+
+The two real Codex checks have an explicit opt-in harness that uses only synthetic fixtures and
+also generates each immutable revision/report/audit trio:
+
+```sh
+KINDLE_GO_CONFIRM_REAL_CODEX=1 tools/test-real-codex.sh
+```
+
+Without that exact environment value the script exits before invoking `codex`.

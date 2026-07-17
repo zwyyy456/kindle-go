@@ -13,6 +13,10 @@ func (f runnerFunc) Run(ctx context.Context, spec CommandSpec) (CommandResult, e
 }
 
 func TestDiagnoseDependenciesChecksRequiredCodexFlags(t *testing.T) {
+	wantFlags := []string{"--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "--image", "--output-schema", "--output-last-message"}
+	if strings.Join(requiredCodexFlags, " ") != strings.Join(wantFlags, " ") {
+		t.Fatalf("required flags = %#v, want %#v", requiredCodexFlags, wantFlags)
+	}
 	runner := runnerFunc(func(_ context.Context, spec CommandSpec) (CommandResult, error) {
 		joined := strings.Join(spec.Args, " ")
 		switch {
@@ -32,6 +36,13 @@ func TestDiagnoseDependenciesChecksRequiredCodexFlags(t *testing.T) {
 		if !result.CodexFlags[flag] {
 			t.Errorf("missing flag %s in %#v", flag, result.CodexFlags)
 		}
+	}
+	if !result.CodexFlagsReady() {
+		t.Fatalf("complete flags were not ready: %#v", result.CodexFlags)
+	}
+	delete(result.CodexFlags, "--sandbox")
+	if result.CodexFlagsReady() {
+		t.Fatal("diagnostics accepted Codex without the required sandbox flag")
 	}
 }
 

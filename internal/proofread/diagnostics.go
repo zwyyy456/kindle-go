@@ -8,7 +8,16 @@ import (
 	"time"
 )
 
-var requiredCodexFlags = []string{"--ephemeral", "--ignore-user-config", "--ignore-rules", "--image", "--output-schema", "--output-last-message"}
+var requiredCodexFlags = []string{
+	"--ephemeral",
+	"--ignore-user-config",
+	"--ignore-rules",
+	"--skip-git-repo-check",
+	"--sandbox",
+	"--image",
+	"--output-schema",
+	"--output-last-message",
+}
 
 type DependencyDiagnostics struct {
 	PythonPath, PythonVersion string
