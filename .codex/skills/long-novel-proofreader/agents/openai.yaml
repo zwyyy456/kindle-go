@@ -1,0 +1,4 @@
+interface:
+  display_name: "长篇小说保守校对"
+  short_description: "逐句与跨章节双层复核长篇小说的文本错误和一致性问题"
+  default_prompt: "Use $long-novel-proofreader to run exhaustive local and global-consistency passes over this Chinese TXT novel, independently verify edits, and produce an auditable revised copy."
