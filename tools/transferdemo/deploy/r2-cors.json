@@ -1,0 +1,22 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://transfer.example.com"
+    ],
+    "AllowedMethods": [
+      "GET",
+      "HEAD",
+      "PUT"
+    ],
+    "AllowedHeaders": [
+      "Content-Type",
+      "x-amz-meta-sha256",
+      "x-amz-checksum-sha256"
+    ],
+    "ExposeHeaders": [
+      "ETag",
+      "x-amz-checksum-sha256"
+    ],
+    "MaxAgeSeconds": 3600
+  }
+]
