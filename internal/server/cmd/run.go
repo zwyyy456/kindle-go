@@ -90,13 +90,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		task.BuildRevisionEPUB: revisionExecutor,
 	})
 	runner.SetLogWriter(stdout)
-	handler := server.Handler{
-		Library:    libraryService,
-		Generation: generationService,
-		Tasks:      taskService,
-		Settings:   settingsService,
-		Proofreads: proofreadService,
-	}
+	handler := server.NewHandler(libraryService, generationService, taskService, settingsService, proofreadService)
 	if stdout != nil {
 		handler.Logger = log.New(stdout, "", log.LstdFlags)
 	}

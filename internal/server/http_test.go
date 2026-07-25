@@ -229,7 +229,7 @@ func TestWebReviewsCandidatesAndAppendsDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := handler.Proofreads.Create(context.Background(), result.Book.ID)
+	created, err := handler.proofreads.Create(context.Background(), result.Book.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
 	if blockedDownload.Code != http.StatusNotFound {
 		t.Fatalf("EPUB download before toggle status = %d", blockedDownload.Code)
 	}
-	values, err := handler.Settings.Current(context.Background())
+	values, err := handler.settings.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,14 +461,14 @@ func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
 
 func TestBookFormDoesNotPersistPerBookConversionSettings(t *testing.T) {
 	handler, service, taskService, _ := newHTTPTestHandler(t)
-	values, err := handler.Settings.Current(context.Background())
+	values, err := handler.settings.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	values.Style.LineHeight = 1.9
 	values.TXT.DropRegex = []string{`^全局广告$`}
 	values.TXT.Replace = []txtconfig.ReplaceRule{{Pattern: "全局错字", With: "全局正字"}}
-	if err := handler.Settings.Save(context.Background(), values); err != nil {
+	if err := handler.settings.Save(context.Background(), values); err != nil {
 		t.Fatal(err)
 	}
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})
@@ -530,6 +530,30 @@ func epubArchiveForHTTP(t *testing.T, files map[string]string) []byte {
 	return buffer.Bytes()
 }
 
+func TestNewHandlerRequiresCoreServices(t *testing.T) {
+	handler, _, _, _ := newHTTPTestHandler(t)
+	tests := []struct {
+		name  string
+		build func()
+	}{
+		{"library", func() { NewHandler(nil, handler.generation, handler.tasks, handler.settings, handler.proofreads) }},
+		{"generation", func() { NewHandler(handler.library, nil, handler.tasks, handler.settings, handler.proofreads) }},
+		{"task", func() { NewHandler(handler.library, handler.generation, nil, handler.settings, handler.proofreads) }},
+		{"settings", func() { NewHandler(handler.library, handler.generation, handler.tasks, nil, handler.proofreads) }},
+		{"proofread", func() { NewHandler(handler.library, handler.generation, handler.tasks, handler.settings, nil) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("NewHandler accepted a missing core service")
+				}
+			}()
+			test.build()
+		})
+	}
+}
+
 func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service, *store.Store) {
 	t.Helper()
 	storage, err := store.Open(t.TempDir())
@@ -545,13 +569,12 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service,
 	}
 	generationService := generation.NewService(service, taskService, txtconfig.Defaults(), settingsService)
 	proofreadService := proofread.NewService(storage, service, taskService, settingsService)
-	return Handler{
-		Library: service, Generation: generationService, Tasks: taskService, Settings: settingsService, Proofreads: proofreadService,
-		CheckCodex: func(context.Context) (string, error) { return "Logged in for test", nil },
-		Diagnostics: func(context.Context) proofread.DependencyDiagnostics {
-			return proofread.DependencyDiagnostics{PythonPath: "/python3", PythonVersion: "Python test", CodexPath: "/codex", CodexVersion: "codex test"}
-		},
-	}, service, taskService, storage
+	handler := NewHandler(service, generationService, taskService, settingsService, proofreadService)
+	handler.CheckCodex = func(context.Context) (string, error) { return "Logged in for test", nil }
+	handler.Diagnostics = func(context.Context) proofread.DependencyDiagnostics {
+		return proofread.DependencyDiagnostics{PythonPath: "/python3", PythonVersion: "Python test", CodexPath: "/codex", CodexVersion: "codex test"}
+	}
+	return handler, service, taskService, storage
 }
 
 func multipartRequest(t *testing.T, target, name, content string) *http.Request {
