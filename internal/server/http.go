@@ -362,30 +362,28 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 			runs = append(runs, storeProofreadRunView{ID: value.ID, Format: strings.ToUpper(value.Format), Model: value.Model, CompletedAt: value.CompletedAt.Format("2006-01-02 15:04")})
 		}
 	}
+	generationByFile := make(map[string]generation.InputAssessment)
+	var generationInputs []generation.InputAssessment
+	if h.Generation != nil {
+		assessments, err := h.Generation.Inputs(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, assessment := range assessments {
+			generationByFile[assessment.ID] = assessment
+			if assessment.Available {
+				generationInputs = append(generationInputs, assessment)
+			}
+		}
+	}
 	files := make([]fileView, 0, len(detail.Files))
-	var generationInputs []generationInputView
 	for _, file := range detail.Files {
 		view := newFileView(file)
-		if file.Role != "original" && file.Role != "revision" {
-			files = append(files, view)
-			continue
-		}
-		compatible := file.Format == "txt"
-		if file.Format == "epub" {
-			report, found, reportErr := h.Library.CompatibilityForFile(r.Context(), file.ID)
-			if reportErr != nil {
-				http.Error(w, reportErr.Error(), http.StatusInternalServerError)
-				return
-			}
-			compatible = found && report.Status == "passed"
-			if found {
-				view.CompatibilityStatus = report.Status
-			}
+		if assessment, ok := generationByFile[file.ID]; ok {
+			view.CompatibilityStatus = assessment.CompatibilityStatus
 		}
 		files = append(files, view)
-		if compatible {
-			generationInputs = append(generationInputs, generationInputView{ID: file.ID, Name: file.DisplayName, Role: file.Role, HasUnresolved: file.HasUnresolved})
-		}
 	}
 	data := bookPageData{
 		Book: recordView{
@@ -480,7 +478,9 @@ func (h Handler) handleTXTPreview(w http.ResponseWriter, r *http.Request, bookID
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	analysis, err := h.Generation.PreviewTXT(r.Context(), bookID, options)
+	analysis, err := h.Generation.PreviewTXT(r.Context(), generation.PreviewRequest{
+		BookID: bookID, InputFileID: r.Form.Get("input_file_id"), Options: options,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -962,20 +962,13 @@ type bookPageData struct {
 	Files            []fileView
 	Tasks            []taskView
 	ProofreadRuns    []storeProofreadRunView
-	GenerationInputs []generationInputView
+	GenerationInputs []generation.InputAssessment
 	Message          string
 	Compatibility    *library.CompatibilityReport
 	CanGenerate      bool
 	Defaults         appsettings.Values
 	DropRegex        string
 	ReplaceJSON      string
-}
-
-type generationInputView struct {
-	ID            string
-	Name          string
-	Role          string
-	HasUnresolved bool
 }
 
 type storeProofreadRunView struct {

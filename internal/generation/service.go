@@ -32,19 +32,34 @@ type Options struct {
 	TrimBlankLines   *bool
 }
 
-func (s *Service) PreviewTXT(ctx context.Context, bookID string, opts Options) (converter.TXTAnalysis, error) {
-	book, ok, err := s.library.GetBook(ctx, bookID)
+type PreviewRequest struct {
+	BookID      string
+	InputFileID string
+	Options     Options
+}
+
+type InputAssessment struct {
+	ID                  string
+	Name                string
+	Role                string
+	HasUnresolved       bool
+	Available           bool
+	CompatibilityStatus string
+}
+
+func (s *Service) PreviewTXT(ctx context.Context, req PreviewRequest) (converter.TXTAnalysis, error) {
+	input, err := s.resolveInput(ctx, req.BookID, req.InputFileID)
 	if err != nil {
 		return converter.TXTAnalysis{}, err
 	}
-	if !ok || book.SourceFormat != "txt" {
+	if input.Format != "txt" {
 		return converter.TXTAnalysis{}, fmt.Errorf("TXT preview is only available for TXT books")
 	}
-	path, _, err := s.library.ResolveOriginal(ctx, book.ID, book.Original.ID, book.Original.SHA256)
+	path, _, err := s.library.ResolveInput(ctx, req.BookID, input.ID, input.SHA256)
 	if err != nil {
 		return converter.TXTAnalysis{}, err
 	}
-	params, err := s.parameters(ctx, book.Original, "epub", opts)
+	params, err := s.parameters(ctx, input, "epub", req.Options)
 	if err != nil {
 		return converter.TXTAnalysis{}, err
 	}
@@ -56,6 +71,28 @@ func (s *Service) PreviewTXT(ctx context.Context, bookID string, opts Options) (
 	return converter.AnalyzeTXT(path, cfg)
 }
 
+func (s *Service) Inputs(ctx context.Context, bookID string) ([]InputAssessment, error) {
+	detail, ok, err := s.library.GetBookDetail(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("book %q not found", bookID)
+	}
+	inputs := make([]InputAssessment, 0, len(detail.Files))
+	for _, file := range detail.Files {
+		if file.Role != "original" && file.Role != "revision" {
+			continue
+		}
+		input, err := s.assessInput(ctx, file)
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, input)
+	}
+	return inputs, nil
+}
+
 type CreateRequest struct {
 	BookID      string
 	InputFileID string
@@ -64,6 +101,7 @@ type CreateRequest struct {
 }
 
 type Parameters struct {
+	SchemaVersion   int                      `json:"version"`
 	InputFormat     string                   `json:"input_format"`
 	OutputFormat    string                   `json:"output_format"`
 	ExpectedSHA256  string                   `json:"expected_sha256"`
@@ -86,41 +124,25 @@ type Service struct {
 	now      func() time.Time
 }
 
-func NewService(libraryService *library.Service, taskService *task.Service, base txtconfig.Config, providers ...DefaultsProvider) *Service {
+func NewService(libraryService *library.Service, taskService *task.Service, base txtconfig.Config, defaults DefaultsProvider) *Service {
 	txtconfig.Normalize(&base)
-	service := &Service{library: libraryService, tasks: taskService, base: base, now: time.Now}
-	if len(providers) != 0 {
-		service.defaults = providers[0]
-	}
-	return service
+	return &Service{library: libraryService, tasks: taskService, base: base, defaults: defaults, now: time.Now}
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, error) {
-	book, ok, err := s.library.GetBook(ctx, req.BookID)
+	input, err := s.resolveInput(ctx, req.BookID, req.InputFileID)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, fmt.Errorf("book %q not found", req.BookID)
+	assessment, err := s.assessInput(ctx, input)
+	if err != nil {
+		return nil, err
 	}
-	input := book.Original
-	if strings.TrimSpace(req.InputFileID) != "" {
-		input, ok, err = s.library.GetFile(ctx, req.InputFileID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || input.BookID != book.ID || (input.Role != "original" && input.Role != "revision") {
-			return nil, fmt.Errorf("generation input file not found")
-		}
-	}
-	if input.Format == "epub" {
-		report, found, err := s.library.CompatibilityForFile(ctx, input.ID)
-		if err != nil {
-			return nil, err
-		}
-		if !found || report.Status != "passed" {
+	if !assessment.Available {
+		if input.Format == "epub" {
 			return nil, fmt.Errorf("epub_incompatible: EPUB compatibility report did not pass")
 		}
+		return nil, fmt.Errorf("%s files are not convertible", input.Format)
 	}
 	if len(req.Formats) == 0 {
 		return nil, fmt.Errorf("at least one output format is required")
@@ -140,9 +162,6 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 		if input.Format == "epub" && format != "azw3" {
 			return nil, fmt.Errorf("EPUB input can only generate AZW3")
 		}
-		if input.Format != "txt" && input.Format != "epub" {
-			return nil, fmt.Errorf("%s files are not convertible", input.Format)
-		}
 		parameters, err := s.parameters(ctx, input, format, req.Options)
 		if err != nil {
 			return nil, err
@@ -155,9 +174,50 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 		if format == "azw3" {
 			taskType = task.GenerateAZW3
 		}
-		requests = append(requests, task.CreateRequest{BookID: book.ID, Type: taskType, InputFileID: input.ID, ParametersJSON: string(encoded), CreatedAt: createdAt})
+		requests = append(requests, task.CreateRequest{BookID: req.BookID, Type: taskType, InputFileID: input.ID, ParametersJSON: string(encoded), CreatedAt: createdAt})
 	}
 	return s.tasks.CreateMany(ctx, requests)
+}
+
+func (s *Service) resolveInput(ctx context.Context, bookID, inputFileID string) (library.File, error) {
+	book, ok, err := s.library.GetBook(ctx, bookID)
+	if err != nil {
+		return library.File{}, err
+	}
+	if !ok {
+		return library.File{}, fmt.Errorf("book %q not found", bookID)
+	}
+	if strings.TrimSpace(inputFileID) == "" {
+		return book.Original, nil
+	}
+	input, ok, err := s.library.GetFile(ctx, inputFileID)
+	if err != nil {
+		return library.File{}, err
+	}
+	if !ok || input.BookID != book.ID || (input.Role != "original" && input.Role != "revision") {
+		return library.File{}, fmt.Errorf("generation input file not found")
+	}
+	return input, nil
+}
+
+func (s *Service) assessInput(ctx context.Context, input library.File) (InputAssessment, error) {
+	assessment := InputAssessment{
+		ID: input.ID, Name: input.DisplayName, Role: input.Role, HasUnresolved: input.HasUnresolved,
+	}
+	switch input.Format {
+	case "txt":
+		assessment.Available = true
+	case "epub":
+		report, found, err := s.library.CompatibilityForFile(ctx, input.ID)
+		if err != nil {
+			return InputAssessment{}, err
+		}
+		if found {
+			assessment.CompatibilityStatus = report.Status
+			assessment.Available = report.Status == "passed"
+		}
+	}
+	return assessment, nil
 }
 
 func (s *Service) parameters(ctx context.Context, input library.File, format string, opts Options) (Parameters, error) {
@@ -218,7 +278,8 @@ func (s *Service) parameters(ctx context.Context, input library.File, format str
 		metadata.Language = ""
 	}
 	return Parameters{
-		InputFormat: input.Format, OutputFormat: format, ExpectedSHA256: input.SHA256,
+		SchemaVersion: taskParametersVersion,
+		InputFormat:   input.Format, OutputFormat: format, ExpectedSHA256: input.SHA256,
 		Metadata: metadata, TXT: cfg.TXT, Style: cfg.Style, Cover: cfg.Output.Cover,
 		DefaultLanguage: cfg.Metadata.Language,
 	}, nil

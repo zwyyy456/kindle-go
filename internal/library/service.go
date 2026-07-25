@@ -38,14 +38,6 @@ func New(source *store.Store) *Service {
 	}
 }
 
-func Open(root string) (*Service, error) {
-	storage, err := store.Open(root)
-	if err != nil {
-		return nil, err
-	}
-	return New(storage), nil
-}
-
 func (s *Service) Close() error {
 	s.mu.Lock()
 	for token, pending := range s.pending {
@@ -205,11 +197,6 @@ func (s *Service) LatestKindleFiles(ctx context.Context, showEPUB bool) ([]Kindl
 
 func (s *Service) AllBooks(ctx context.Context) ([]Book, error) {
 	books, err := s.store.AllBooks(ctx)
-	return booksFromStore(books), err
-}
-
-func (s *Service) RecentBooks(ctx context.Context, cutoff time.Time) ([]Book, error) {
-	books, err := s.store.RecentBooks(ctx, cutoff)
 	return booksFromStore(books), err
 }
 

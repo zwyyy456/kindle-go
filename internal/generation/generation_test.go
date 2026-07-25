@@ -22,7 +22,7 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 	storage, libraryService, taskService, book := newGenerationTest(t)
 	_ = storage
 	base := txtconfig.Defaults()
-	service := NewService(libraryService, taskService, base)
+	service := NewService(libraryService, taskService, base, nil)
 	tasks, err := service.Create(context.Background(), CreateRequest{
 		BookID: book.ID, Formats: []string{"epub", "azw3"},
 		Options: Options{Title: "任务标题", Author: "作者", SplitLevel: 1, LineHeight: 1.8},
@@ -37,7 +37,7 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 	if err := json.Unmarshal([]byte(tasks[0].ParametersJSON), &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Metadata.Title != "任务标题" || snapshot.Metadata.Author != "作者" || snapshot.TXT.SplitLevel != 1 || snapshot.Style.LineHeight != 1.8 || snapshot.ExpectedSHA256 != book.Original.SHA256 {
+	if snapshot.SchemaVersion != taskParametersVersion || snapshot.Metadata.Title != "任务标题" || snapshot.Metadata.Author != "作者" || snapshot.TXT.SplitLevel != 1 || snapshot.Style.LineHeight != 1.8 || snapshot.ExpectedSHA256 != book.Original.SHA256 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 
@@ -160,7 +160,7 @@ func TestQueuedGenerationFreezesGlobalDefaults(t *testing.T) {
 
 func TestGenerationFailsWhenImmutableSourceHashChanges(t *testing.T) {
 	_, libraryService, taskService, book := newGenerationTest(t)
-	service := NewService(libraryService, taskService, txtconfig.Defaults())
+	service := NewService(libraryService, taskService, txtconfig.Defaults(), nil)
 	tasks, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}})
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,28 @@ func TestGenerationCanUseReadyRevisionAsImmutableInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(libraryService, taskService, txtconfig.Defaults())
+	service := NewService(libraryService, taskService, txtconfig.Defaults(), nil)
+	inputs, err := service.Inputs(context.Background(), book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	available := make(map[string]bool, len(inputs))
+	for _, input := range inputs {
+		available[input.ID] = input.Available
+	}
+	if len(inputs) != 2 || !available[book.Original.ID] || !available[committed.Revision.ID] {
+		t.Fatalf("generation inputs = %#v", inputs)
+	}
+	dropRegex := []string{`^修订正文。$`}
+	analysis, err := service.PreviewTXT(context.Background(), PreviewRequest{
+		BookID: book.ID, InputFileID: committed.Revision.ID, Options: Options{DropRegex: &dropRegex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.Stats.Text.DroppedLines != 1 {
+		t.Fatalf("revision preview stats = %#v", analysis.Stats)
+	}
 	created, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, InputFileID: committed.Revision.ID, Formats: []string{"epub"}})
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +275,7 @@ func TestEPUBGenerationRequiresPersistedReportAndRechecksSource(t *testing.T) {
 	libraryService := library.New(storage)
 	defer libraryService.Close()
 	taskService := task.NewService(storage)
-	service := NewService(libraryService, taskService, txtconfig.Defaults())
+	service := NewService(libraryService, taskService, txtconfig.Defaults(), nil)
 	valid := generationEPUB(t, false)
 	imported, err := libraryService.Import(context.Background(), library.ImportRequest{Filename: "valid.epub", Reader: bytes.NewReader(valid)})
 	if err != nil {

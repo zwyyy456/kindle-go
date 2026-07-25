@@ -221,10 +221,6 @@ func (s *Store) AllBooks(ctx context.Context) ([]Book, error) {
 	return s.listBooks(ctx, `WHERE b.state = 'active' ORDER BY b.imported_at DESC, b.id DESC`)
 }
 
-func (s *Store) RecentBooks(ctx context.Context, cutoff time.Time) ([]Book, error) {
-	return s.listBooks(ctx, `WHERE b.state = 'active' AND b.imported_at >= ? ORDER BY b.imported_at DESC, b.id DESC`, formatTime(cutoff))
-}
-
 func (s *Store) BooksPage(ctx context.Context, search, sortOrder, statusFilter string, limit, offset int) ([]Book, int, error) {
 	if limit <= 0 {
 		limit = 50

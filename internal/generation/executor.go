@@ -2,7 +2,6 @@ package generation
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,8 +21,8 @@ type Executor struct {
 func NewExecutor(service *library.Service) *Executor { return &Executor{library: service} }
 
 func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.ProgressReporter) error {
-	var params Parameters
-	if err := json.Unmarshal([]byte(value.ParametersJSON), &params); err != nil {
+	params, err := decodeParameters(value.ParametersJSON)
+	if err != nil {
 		return &task.ExecutionError{Code: "invalid_task_parameters", Err: err}
 	}
 	if err := progress.Report(ctx, "prepare", 0, 4); err != nil {
