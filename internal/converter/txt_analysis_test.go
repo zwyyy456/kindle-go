@@ -23,7 +23,7 @@ func TestTXTPreviewAndGeneratedEPUBShareStructuredAnalysis(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := filepath.Join(root, "book.epub")
-	if _, err := Convert(context.Background(), Request{InputPath: input, OutputPath: output, InputFormat: FormatTXT, OutputFormat: FormatEPUB, TXTConfig: cfg}); err != nil {
+	if err := Convert(context.Background(), Request{InputPath: input, OutputPath: output, InputFormat: FormatTXT, OutputFormat: FormatEPUB, TXTConfig: cfg}); err != nil {
 		t.Fatal(err)
 	}
 	generated, err := epub.Read(output, epub.Options{})

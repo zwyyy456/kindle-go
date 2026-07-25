@@ -39,7 +39,7 @@ func TestConvertTXTToEPUB(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := txtconfig.Defaults()
-	_, err := Convert(context.Background(), Request{InputPath: input, OutputPath: output, InputFormat: FormatTXT, OutputFormat: FormatEPUB, TXTConfig: cfg})
+	err := Convert(context.Background(), Request{InputPath: input, OutputPath: output, InputFormat: FormatTXT, OutputFormat: FormatEPUB, TXTConfig: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}

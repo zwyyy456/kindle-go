@@ -3,7 +3,6 @@ package converter
 import (
 	"context"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 
@@ -34,21 +33,14 @@ type Request struct {
 	Metadata        MetadataOverrides
 	DefaultLanguage string
 	TXTConfig       txtconfig.Config
-	Preview         bool
-	Verbose         bool
-	Stdout          io.Writer
 }
 
-type Result struct {
-	OutputPath string
-}
-
-func Convert(ctx context.Context, req Request) (Result, error) {
+func Convert(ctx context.Context, req Request) error {
 	if err := validate(req); err != nil {
-		return Result{}, err
+		return err
 	}
 	if err := ctx.Err(); err != nil {
-		return Result{}, err
+		return err
 	}
 	switch req.InputFormat {
 	case FormatTXT:
@@ -59,18 +51,15 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 		txtconfig.Normalize(&cfg)
 		analysis, err := AnalyzeTXT(req.InputPath, cfg)
 		if err != nil {
-			return Result{}, err
-		}
-		if req.Preview {
-			return Result{OutputPath: req.OutputPath}, nil
+			return err
 		}
 		if err := WriteTXTAnalysis(req.OutputPath, string(req.OutputFormat), analysis); err != nil {
-			return Result{}, err
+			return err
 		}
 	case FormatEPUB:
 		book, err := epub.Read(req.InputPath, epub.Options{DefaultLanguage: req.DefaultLanguage})
 		if err != nil {
-			return Result{}, err
+			return err
 		}
 		if value := strings.TrimSpace(req.Metadata.Title); value != "" {
 			book.Metadata.Title = value
@@ -82,13 +71,13 @@ func Convert(ctx context.Context, req Request) (Result, error) {
 			book.Metadata.Language = value
 		}
 		if err := ctx.Err(); err != nil {
-			return Result{}, err
+			return err
 		}
 		if err := azw3.Write(req.OutputPath, book, azw3.Options{}); err != nil {
-			return Result{}, err
+			return err
 		}
 	}
-	return Result{OutputPath: req.OutputPath}, nil
+	return nil
 }
 
 func validate(req Request) error {
@@ -104,16 +93,13 @@ func validate(req Request) error {
 	if req.InputFormat == FormatEPUB && req.OutputFormat != FormatAZW3 {
 		return fmt.Errorf("epub input can only be converted to azw3")
 	}
-	if req.Preview && req.InputFormat != FormatTXT {
-		return fmt.Errorf("preview is only supported for TXT input")
-	}
-	if !req.Preview && strings.TrimSpace(req.OutputPath) == "" {
+	if strings.TrimSpace(req.OutputPath) == "" {
 		return fmt.Errorf("output path is required")
 	}
 	extension := strings.ToLower(filepath.Ext(req.OutputPath))
 	wantExtension := "." + string(req.OutputFormat)
 	stagedExtension := wantExtension + ".part"
-	if !req.Preview && extension != wantExtension && !strings.HasSuffix(strings.ToLower(req.OutputPath), stagedExtension) {
+	if extension != wantExtension && !strings.HasSuffix(strings.ToLower(req.OutputPath), stagedExtension) {
 		return fmt.Errorf("%s output must use .%s extension", strings.ToUpper(string(req.OutputFormat)), req.OutputFormat)
 	}
 	return nil

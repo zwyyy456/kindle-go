@@ -52,7 +52,7 @@ func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.P
 	cfg.Style = params.Style
 	cfg.Output.Cover = params.Cover
 	metadata := converter.MetadataOverrides{Title: params.Metadata.Title, Author: params.Metadata.Author, Language: params.Metadata.Language}
-	_, err = converter.Convert(ctx, converter.Request{
+	err = converter.Convert(ctx, converter.Request{
 		InputPath: inputPath, OutputPath: outputPath,
 		InputFormat: converter.Format(params.InputFormat), OutputFormat: converter.Format(params.OutputFormat),
 		Metadata: metadata, DefaultLanguage: params.DefaultLanguage, TXTConfig: cfg,

@@ -5,8 +5,44 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestRunPreviewPrintsTOCWithoutWritingOutput(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "book.txt")
+	output := filepath.Join(dir, "book.epub")
+	if err := os.WriteFile(input, []byte("第一章 开始\n正文。"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Run([]string{"--preview", "-o", output, input}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run: %v, stderr=%s", err, stderr.String())
+	}
+	if text := stdout.String(); !strings.Contains(text, "toc:") || !strings.Contains(text, "第一章 开始") {
+		t.Fatalf("preview output = %q", text)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("preview output file exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+func TestRunVerbosePrintsDetailedTXTAnalysis(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "book.txt")
+	output := filepath.Join(dir, "book.epub")
+	if err := os.WriteFile(input, []byte("第一章 开始\n正文。"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Run([]string{"--verbose", "-o", output, input}, &stdout, &stderr); err != nil {
+		t.Fatalf("Run: %v, stderr=%s", err, stderr.String())
+	}
+	if text := stdout.String(); !strings.Contains(text, "charset:") || !strings.Contains(text, "toc:") {
+		t.Fatalf("verbose output = %q", text)
+	}
+}
 
 func TestRunConvertsEPUBToAZW3(t *testing.T) {
 	dir := t.TempDir()

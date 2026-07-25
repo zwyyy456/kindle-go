@@ -10,6 +10,7 @@ import (
 
 	"github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/converter"
+	"github.com/flashdict/kindle2flashdict/internal/txt2epub/book"
 )
 
 type stringList []string
@@ -92,11 +93,33 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	if inputFormat == converter.FormatTXT {
 		metadata.Language = cfg.Metadata.Language
 	}
-	_, err = converter.Convert(context.Background(), converter.Request{
+	if inputFormat == converter.FormatTXT {
+		analysis, err := converter.AnalyzeTXT(input, cfg)
+		if err != nil {
+			return err
+		}
+		if flags.preview {
+			book.PrintPreview(stdout, analysis.Parsed)
+			return nil
+		}
+		if err := converter.WriteTXTAnalysis(output, cfg.Output.Format, analysis); err != nil {
+			return err
+		}
+		if flags.verbose {
+			book.PrintPreview(stdout, analysis.Parsed)
+		} else {
+			book.PrintSummary(stdout, analysis.Parsed, output)
+		}
+		return nil
+	}
+	if flags.preview {
+		return fmt.Errorf("preview is only supported for TXT input")
+	}
+	err = converter.Convert(context.Background(), converter.Request{
 		InputPath: input, OutputPath: output,
 		InputFormat: inputFormat, OutputFormat: converter.Format(cfg.Output.Format),
 		Metadata: metadata, DefaultLanguage: cfg.Metadata.Language,
-		TXTConfig: cfg, Preview: flags.preview, Verbose: flags.verbose, Stdout: stdout,
+		TXTConfig: cfg,
 	})
 	if err == nil && inputFormat == converter.FormatEPUB {
 		fmt.Fprintf(stdout, "wrote %s\n", output)
