@@ -26,8 +26,14 @@ Settings page. The explicit “Check Codex login” button only runs `codex logi
 invoke a model or send book content. Starting a proofreading task is the actual model-availability
 check.
 
-The Web UI v1 implementation order and milestone acceptance checks are documented in
-[`docs/development-plan.md`](docs/development-plan.md).
+The original Web UI v1 implementation plan and its design rationale are preserved in
+[`docs/development-plan.md`](docs/development-plan.md); it is not the current implementation-status
+source.
+
+Repository-wide engineering decisions follow [`AGENTS.md`](AGENTS.md) and
+[`engineering-guidelines.md`](engineering-guidelines.md). The former is the compact execution
+entry; the latter adapts general Go community conventions to this project's persistence, task,
+file, and local-network boundaries.
 
 ## Project Layout
 
