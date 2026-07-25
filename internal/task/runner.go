@@ -15,6 +15,9 @@ import (
 )
 
 type Executor interface {
+	// Execute must atomically publish its business result and transition the task
+	// to Completed before returning nil. Runner owns failure handling and verifies
+	// this success postcondition instead of completing tasks as a fallback.
 	Execute(ctx context.Context, task Task, progress ProgressReporter) error
 }
 
@@ -199,7 +202,13 @@ func (r *Runner) execute(parent context.Context, value Task) {
 		return
 	}
 	if err == nil {
-		_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Completed), "", "", r.service.now())
+		if latest.Status != Completed {
+			const code = "executor_completion_missing"
+			message := fmt.Sprintf("executor for %s returned without publishing a completed result", value.Type)
+			_, _ = r.service.store.FinishTask(context.Background(), value.ID, string(Failed), code, message, r.service.now())
+			r.logTask(value, "finished", "failed", code, "", current.StartedAt)
+			return
+		}
 		r.logTask(value, "finished", "completed", "", "", current.StartedAt)
 		return
 	}

@@ -24,7 +24,7 @@ func TestRunnerUsesOnePersistentFIFOWithIndependentExecutionSlots(t *testing.T) 
 	releaseGeneration := make(chan struct{})
 	releaseProofread := make(chan struct{})
 	executors := map[Type]Executor{
-		GenerateEPUB: executorFunc(func(ctx context.Context, value Task, _ ProgressReporter) error {
+		GenerateEPUB: completingExecutor(service, func(ctx context.Context, value Task, _ ProgressReporter) error {
 			generationStarted <- value.ID
 			select {
 			case <-releaseGeneration:
@@ -33,7 +33,7 @@ func TestRunnerUsesOnePersistentFIFOWithIndependentExecutionSlots(t *testing.T) 
 				return ctx.Err()
 			}
 		}),
-		Proofread: executorFunc(func(ctx context.Context, value Task, _ ProgressReporter) error {
+		Proofread: completingExecutor(service, func(ctx context.Context, value Task, _ ProgressReporter) error {
 			proofreadStarted <- value.ID
 			select {
 			case <-releaseProofread:
@@ -140,7 +140,7 @@ func TestTaskEventsPersistLifecycleWithoutExecutorContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := executorFunc(func(ctx context.Context, _ Task, progress ProgressReporter) error {
+	executor := completingExecutor(service, func(ctx context.Context, _ Task, progress ProgressReporter) error {
 		return progress.Report(ctx, "write", 2, 4)
 	})
 	cancelRunner, runnerDone := startRunner(t, service, map[Type]Executor{GenerateEPUB: executor})
@@ -201,7 +201,7 @@ func TestRunnerRecoversInterruptedTaskAndKeepsQueuedTask(t *testing.T) {
 		t.Fatalf("claimed = %#v, %v, %v", claimed, ok, err)
 	}
 	release := make(chan struct{})
-	executor := executorFunc(func(ctx context.Context, _ Task, _ ProgressReporter) error {
+	executor := completingExecutor(service, func(ctx context.Context, _ Task, _ ProgressReporter) error {
 		select {
 		case <-release:
 			return nil
@@ -225,12 +225,33 @@ func TestRunnerRecoversInterruptedTaskAndKeepsQueuedTask(t *testing.T) {
 func TestCompletedTaskWinsBeforeLateCancel(t *testing.T) {
 	service, bookID, inputID := newTaskTestService(t)
 	value, _ := service.Create(context.Background(), CreateRequest{BookID: bookID, Type: GenerateEPUB, InputFileID: inputID})
-	executor := executorFunc(func(context.Context, Task, ProgressReporter) error { return nil })
+	executor := completingExecutor(service, func(context.Context, Task, ProgressReporter) error { return nil })
 	cancelRunner, runnerDone := startRunner(t, service, map[Type]Executor{GenerateEPUB: executor})
 	waitStatus(t, service, value.ID, Completed)
 	var conflict *ConflictError
 	if err := service.Cancel(context.Background(), value.ID); !errors.As(err, &conflict) {
 		t.Fatalf("late cancel error = %v", err)
+	}
+	cancelRunner()
+	waitRunner(t, runnerDone)
+}
+
+func TestRunnerRejectsExecutorSuccessWithoutPublishedCompletion(t *testing.T) {
+	service, bookID, inputID := newTaskTestService(t)
+	value, err := service.Create(context.Background(), CreateRequest{BookID: bookID, Type: GenerateEPUB, InputFileID: inputID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelRunner, runnerDone := startRunner(t, service, map[Type]Executor{
+		GenerateEPUB: executorFunc(func(context.Context, Task, ProgressReporter) error { return nil }),
+	})
+	waitStatus(t, service, value.ID, Failed)
+	failed, _, err := service.Get(context.Background(), value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.ErrorCode != "executor_completion_missing" {
+		t.Fatalf("failed task = %#v", failed)
 	}
 	cancelRunner()
 	waitRunner(t, runnerDone)
@@ -262,6 +283,22 @@ func TestOnlyOneRunnerCanOwnLibrary(t *testing.T) {
 	var held *store.RuntimeLockHeldError
 	if !errors.As(err, &held) || held.Lock.PID == 0 {
 		t.Fatalf("second runner prepare error = %v", err)
+	}
+}
+
+func completingExecutor(service *Service, execute executorFunc) executorFunc {
+	return func(ctx context.Context, value Task, progress ProgressReporter) error {
+		if err := execute(ctx, value, progress); err != nil {
+			return err
+		}
+		changed, err := service.store.FinishTask(context.Background(), value.ID, string(Completed), "", "", service.now())
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return errors.New("task completion was not committed")
+		}
+		return nil
 	}
 }
 
