@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "name": "Cloud/Store",
+      "priority": 0,
+      "items": [
+        {
+          "name": "Apply 5.15.1 CloudClosure Patch",
+          "priority": 3,
+          "action": "./apply-5.15.1.sh",
+          "exitmenu": true,
+          "refresh": false
+        },
+        {
+          "name": "Restore 5.15.1 CloudClosure Patch",
+          "priority": 4,
+          "action": "./restore-5.15.1.sh",
+          "exitmenu": true,
+          "refresh": false
+        }
+      ]
+    }
+  ]
+}
