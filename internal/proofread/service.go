@@ -19,6 +19,7 @@ import (
 )
 
 type Parameters struct {
+	SchemaVersion  int    `json:"version"`
 	ExpectedSHA256 string `json:"expected_sha256"`
 	Format         string `json:"format"`
 	Model          string `json:"model"`
@@ -66,6 +67,7 @@ func (s *Service) Create(ctx context.Context, bookID string) (task.Task, error) 
 		version = epubengine.Version()
 	}
 	parameters := Parameters{
+		SchemaVersion:  taskParametersVersion,
 		ExpectedSHA256: book.Original.SHA256, Format: book.SourceFormat, Model: values.Proofread.Model,
 		BatchSize: values.Proofread.BatchSize, Concurrency: values.Proofread.Concurrency, EngineVersion: version,
 	}
@@ -168,6 +170,7 @@ type RevisionDecision struct {
 }
 
 type RevisionParameters struct {
+	SchemaVersion int                `json:"version"`
 	RunID         string             `json:"run_id"`
 	SourceFileID  string             `json:"source_file_id"`
 	SourceSHA256  string             `json:"source_sha256"`
@@ -190,7 +193,8 @@ func (s *Service) CreateRevision(ctx context.Context, runID string, confirmUnres
 		return task.Task{}, err
 	}
 	parameters := RevisionParameters{
-		RunID: run.ID, SourceFileID: run.SourceFileID, SourceSHA256: run.SourceSHA256, Format: run.Format, EngineVersion: run.EngineVersion,
+		SchemaVersion: taskParametersVersion,
+		RunID:         run.ID, SourceFileID: run.SourceFileID, SourceSHA256: run.SourceSHA256, Format: run.Format, EngineVersion: run.EngineVersion,
 		Decisions: make([]RevisionDecision, 0, len(views)),
 	}
 	for _, view := range views {

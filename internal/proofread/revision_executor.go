@@ -33,8 +33,8 @@ func NewRevisionExecutor(storage *store.Store, libraryService *library.Service, 
 }
 
 func (e *RevisionExecutor) Execute(ctx context.Context, value task.Task, progress task.ProgressReporter) error {
-	var params RevisionParameters
-	if err := json.Unmarshal([]byte(value.ParametersJSON), &params); err != nil {
+	params, err := decodeRevisionParameters(value.ParametersJSON)
+	if err != nil {
 		return &task.ExecutionError{Code: "invalid_task_parameters", Err: err}
 	}
 	if params.Format != "txt" && params.Format != "epub" {

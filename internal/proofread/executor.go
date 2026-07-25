@@ -95,8 +95,8 @@ type imageRecord struct {
 }
 
 func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.ProgressReporter) error {
-	var params Parameters
-	if err := json.Unmarshal([]byte(value.ParametersJSON), &params); err != nil {
+	params, err := decodeProofreadParameters(value.ParametersJSON)
+	if err != nil {
 		return &task.ExecutionError{Code: "proofread_engine_failed", Message: "invalid proofreading task parameters", Err: err}
 	}
 	if params.Format != "txt" && params.Format != "epub" {
