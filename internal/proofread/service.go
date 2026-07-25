@@ -78,45 +78,24 @@ func (s *Service) Create(ctx context.Context, bookID string) (task.Task, error) 
 	return s.tasks.Create(ctx, task.CreateRequest{BookID: book.ID, Type: task.Proofread, InputFileID: book.Original.ID, ParametersJSON: string(encoded), CreatedAt: s.now()})
 }
 
-type ReviewQuery struct {
-	Filter   string
-	Page     int
-	PageSize int
+func (s *Service) Runs(ctx context.Context, bookID string) ([]Run, error) {
+	records, err := s.store.ProofreadRuns(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	runs := make([]Run, 0, len(records))
+	for _, record := range records {
+		runs = append(runs, runFromStore(record))
+	}
+	return runs, nil
 }
 
-type CandidateView struct {
-	Candidate   store.ProofreadCandidateRecord
-	Context     string
-	Location    string
-	Outcome     string
-	Replacement string
-	Automatic   bool
-	ConflictIDs []string
-	History     []store.CandidateDecisionRecord
-}
-
-type ReviewPage struct {
-	Run         store.ProofreadRunRecord
-	Candidates  []CandidateView
-	Filter      string
-	Page        int
-	Total       int
-	HasPrevious bool
-	HasNext     bool
-	Unresolved  int
-}
-
-type DecisionRequest struct {
-	Decision    string
-	Replacement string
-}
-
-func (s *Service) Runs(ctx context.Context, bookID string) ([]store.ProofreadRunRecord, error) {
-	return s.store.ProofreadRuns(ctx, bookID)
-}
-
-func (s *Service) Run(ctx context.Context, runID string) (store.ProofreadRunRecord, bool, error) {
-	return s.store.ProofreadRun(ctx, runID)
+func (s *Service) Run(ctx context.Context, runID string) (Run, bool, error) {
+	record, ok, err := s.store.ProofreadRun(ctx, runID)
+	if err != nil || !ok {
+		return Run{}, ok, err
+	}
+	return runFromStore(record), true, nil
 }
 
 func (s *Service) Review(ctx context.Context, bookID, runID string, query ReviewQuery) (ReviewPage, bool, error) {
@@ -156,7 +135,7 @@ func (s *Service) Review(ctx context.Context, bookID, runID string, query Review
 	start := min((page-1)*pageSize, total)
 	end := min(start+pageSize, total)
 	return ReviewPage{
-		Run: run, Candidates: views[start:end], Filter: filter, Page: page, Total: total,
+		Run: runFromStore(run), Candidates: views[start:end], Filter: filter, Page: page, Total: total,
 		HasPrevious: page > 1, HasNext: end < total, Unresolved: unresolved,
 	}, true, nil
 }
@@ -236,20 +215,21 @@ func (s *Service) CreateRevision(ctx context.Context, runID string, confirmUnres
 	})
 }
 
-func (s *Service) Decide(ctx context.Context, candidateID string, request DecisionRequest) (store.ProofreadRunRecord, error) {
+func (s *Service) Decide(ctx context.Context, candidateID string, request DecisionRequest) (Run, error) {
 	s.decision.Lock()
 	defer s.decision.Unlock()
 	candidate, ok, err := s.store.ProofreadCandidate(ctx, candidateID)
 	if err != nil {
-		return store.ProofreadRunRecord{}, err
+		return Run{}, err
 	}
 	if !ok {
-		return store.ProofreadRunRecord{}, fmt.Errorf("candidate not found")
+		return Run{}, fmt.Errorf("candidate not found")
 	}
 	run, ok, err := s.store.ProofreadRun(ctx, candidate.RunID)
 	if err != nil || !ok {
-		return store.ProofreadRunRecord{}, fmt.Errorf("proofread run not found")
+		return Run{}, fmt.Errorf("proofread run not found")
 	}
+	result := runFromStore(run)
 	request.Decision = strings.TrimSpace(request.Decision)
 	request.Replacement = strings.TrimSpace(request.Replacement)
 	switch request.Decision {
@@ -259,21 +239,21 @@ func (s *Service) Decide(ctx context.Context, candidateID string, request Decisi
 		request.Replacement = ""
 	case "modify":
 		if candidate.Kind != "text" {
-			return run, fmt.Errorf("image candidates cannot use a text replacement")
+			return result, fmt.Errorf("image candidates cannot use a text replacement")
 		}
 		if request.Replacement == "" {
-			return run, fmt.Errorf("modified replacement must not be empty")
+			return result, fmt.Errorf("modified replacement must not be empty")
 		}
 		if strings.ContainsAny(request.Replacement, "\r\n") {
-			return run, fmt.Errorf("modified replacement must stay on one line")
+			return result, fmt.Errorf("modified replacement must stay on one line")
 		}
 	default:
-		return run, fmt.Errorf("decision must be accept, reject, or modify")
+		return result, fmt.Errorf("decision must be accept, reject, or modify")
 	}
 	if request.Decision != "reject" {
 		views, err := s.candidateViews(ctx, run)
 		if err != nil {
-			return run, err
+			return result, err
 		}
 		for index := range views {
 			if views[index].Candidate.ID == candidateID {
@@ -288,12 +268,12 @@ func (s *Service) Decide(ctx context.Context, candidateID string, request Decisi
 		markConflicts(views)
 		for _, view := range views {
 			if view.Candidate.ID == candidateID && len(view.ConflictIDs) != 0 {
-				return run, fmt.Errorf("candidate_conflict: candidate overlaps another applied candidate; reject the conflicting candidate first")
+				return result, fmt.Errorf("candidate_conflict: candidate overlaps another applied candidate; reject the conflicting candidate first")
 			}
 		}
 	}
 	_, err = s.store.AppendCandidateDecision(ctx, candidateID, request.Decision, request.Replacement, s.now())
-	return run, err
+	return result, err
 }
 
 func (s *Service) candidateViews(ctx context.Context, run store.ProofreadRunRecord) ([]CandidateView, error) {
@@ -305,9 +285,9 @@ func (s *Service) candidateViews(ctx context.Context, run store.ProofreadRunReco
 	if err != nil {
 		return nil, err
 	}
-	history := make(map[string][]store.CandidateDecisionRecord)
+	history := make(map[string][]Decision)
 	for _, decision := range decisions {
-		history[decision.CandidateID] = append(history[decision.CandidateID], decision)
+		history[decision.CandidateID] = append(history[decision.CandidateID], decisionFromStore(decision))
 	}
 	contexts, err := s.candidateContexts(run)
 	if err != nil {
@@ -316,7 +296,7 @@ func (s *Service) candidateViews(ctx context.Context, run store.ProofreadRunReco
 	views := make([]CandidateView, 0, len(candidates))
 	for _, candidate := range candidates {
 		automatic := candidate.FirstConfidence == "high" && candidate.Verification == "high" && candidate.FirstReplacement == candidate.VerifiedReplacement
-		view := CandidateView{Candidate: candidate, Context: contexts[candidate.ID], Location: locationLabel(candidate.LocationJSON), Automatic: automatic, History: history[candidate.ID]}
+		view := CandidateView{Candidate: candidateFromStore(candidate), Context: contexts[candidate.ID], Location: locationLabel(candidate.LocationJSON), Automatic: automatic, History: history[candidate.ID]}
 		if len(view.History) == 0 {
 			if automatic {
 				view.Outcome = "automatic"
@@ -379,7 +359,7 @@ func applies(outcome string) bool {
 	return outcome == "automatic" || outcome == "accepted" || outcome == "modified"
 }
 
-func candidatesConflict(left, right store.ProofreadCandidateRecord) bool {
+func candidatesConflict(left, right Candidate) bool {
 	var a, b map[string]any
 	if json.Unmarshal([]byte(left.LocationJSON), &a) != nil || json.Unmarshal([]byte(right.LocationJSON), &b) != nil {
 		return false

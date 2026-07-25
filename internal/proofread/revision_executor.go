@@ -204,7 +204,7 @@ func validateRevisionSnapshot(candidates []store.ProofreadCandidateRecord, decis
 	}
 	for left := 0; left < len(applying); left++ {
 		for right := left + 1; right < len(applying); right++ {
-			if candidatesConflict(applying[left], applying[right]) {
+			if candidatesConflict(candidateFromStore(applying[left]), candidateFromStore(applying[right])) {
 				return fmt.Errorf("applied candidates %q and %q overlap", applying[left].ID, applying[right].ID)
 			}
 		}
