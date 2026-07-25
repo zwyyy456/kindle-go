@@ -829,24 +829,6 @@ function getCompatHost() {
     });
   });
 }
-function rewriteLocalCandidates(desc, host) {
-  var changed = 0;
-  var local = 0;
-  var lines = String(desc.sdp || "").split("\r\n");
-  for (var i = 0; i < lines.length; i++) {
-    if (lines[i].indexOf("a=candidate:") !== 0) continue;
-    var parts = lines[i].split(" ");
-    if (parts.length < 8) continue;
-    if (parts[4] && /\.local$/i.test(parts[4])) {
-      local++;
-      parts[4] = host;
-      lines[i] = parts.join(" ");
-      changed++;
-    }
-  }
-  if (local || changed) log("SDP mDNS host candidates: " + local + ", rewritten: " + changed + " -> " + host);
-  return {type: desc.type, sdp: lines.join("\r\n")};
-}
 `
 
 const senderHTML = `<!doctype html>
@@ -947,7 +929,8 @@ function createOnline() {
     log("Token created for: " + selectedFile.name);
     log("Waiting for the receiving browser to enter the code...");
     getCompatHost().then(function(host) {
-      $('hint').textContent = "On the receiving device, open http://" + host + ":" + location.port + "/ and enter this code.";
+      var receiverURL = location.protocol + "//" + host + (location.port ? ":" + location.port : "") + "/";
+      $('hint').textContent = "On the receiving device, open " + receiverURL + " and enter this code.";
     });
     startPeer();
   });
@@ -1061,10 +1044,7 @@ function startPeer() {
     log("Waiting for ICE gathering to complete...");
     return waitForIceComplete(pc);
   }).then(function() {
-    return getCompatHost();
-  }).then(function(host) {
-    var offer = rewriteLocalCandidates(pc.localDescription, host);
-    postSignal(session, "sender", "offer", offer);
+    postSignal(session, "sender", "offer", pc.localDescription);
     log("Offer posted with embedded ICE candidates. Kindle can now join with token " + session + ".");
     poll();
   }).then(function() {

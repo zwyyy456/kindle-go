@@ -286,6 +286,29 @@ func TestTransferPagesContainOfflineAndBoundedOnlinePaths(t *testing.T) {
 	}
 }
 
+func TestSenderDoesNotRewriteMDNSCandidates(t *testing.T) {
+	if strings.Contains(senderHTML, "rewriteLocalCandidates") {
+		t.Fatal("sender rewrites browser-generated mDNS ICE candidates")
+	}
+	if !strings.Contains(senderHTML, `postSignal(session, "sender", "offer", pc.localDescription);`) {
+		t.Fatal("sender does not publish the browser-generated local description")
+	}
+}
+
+func TestSenderInviteUsesCurrentProtocolAndOptionalPort(t *testing.T) {
+	if strings.Contains(senderHTML, `"On the receiving device, open http://"`) {
+		t.Fatal("sender invitation hard-codes HTTP")
+	}
+	for _, expected := range []string{
+		`location.protocol + "//" + host`,
+		`(location.port ? ":" + location.port : "")`,
+	} {
+		if !strings.Contains(senderHTML, expected) {
+			t.Fatalf("sender invitation does not contain %q", expected)
+		}
+	}
+}
+
 func TestClientConfigRejectsTURN(t *testing.T) {
 	if _, err := parseSTUNURLs("turn:relay.example.com"); err == nil {
 		t.Fatal("TURN URL accepted")
