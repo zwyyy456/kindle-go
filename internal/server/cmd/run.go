@@ -77,7 +77,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	taskService := task.NewService(storage)
-	generationService := generation.NewService(libraryService, taskService, baseCfg, settingsService)
+	generationService := generation.NewService(libraryService, taskService, settingsService)
 	generationExecutor := generation.NewExecutor(libraryService)
 	proofreadService := proofread.NewService(storage, libraryService, taskService, settingsService)
 	proofreadExecutor := proofread.NewExecutor(storage, libraryService, nil, nil)

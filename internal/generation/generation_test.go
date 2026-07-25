@@ -19,10 +19,8 @@ import (
 )
 
 func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
-	storage, libraryService, taskService, book := newGenerationTest(t)
-	_ = storage
-	base := txtconfig.Defaults()
-	service := NewService(libraryService, taskService, base, nil)
+	_, libraryService, taskService, settingsService, book := newGenerationTest(t)
+	service := NewService(libraryService, taskService, settingsService)
 	tasks, err := service.Create(context.Background(), CreateRequest{
 		BookID: book.ID, Formats: []string{"epub", "azw3"},
 		Options: Options{Title: "任务标题", Author: "作者", SplitLevel: 1, LineHeight: 1.8},
@@ -120,12 +118,8 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 }
 
 func TestQueuedGenerationFreezesGlobalDefaults(t *testing.T) {
-	storage, libraryService, taskService, book := newGenerationTest(t)
-	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{})
-	if err := settingsService.Initialize(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	service := NewService(libraryService, taskService, txtconfig.Defaults(), settingsService)
+	_, libraryService, taskService, settingsService, book := newGenerationTest(t)
+	service := NewService(libraryService, taskService, settingsService)
 	values, err := settingsService.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -159,8 +153,8 @@ func TestQueuedGenerationFreezesGlobalDefaults(t *testing.T) {
 }
 
 func TestGenerationFailsWhenImmutableSourceHashChanges(t *testing.T) {
-	_, libraryService, taskService, book := newGenerationTest(t)
-	service := NewService(libraryService, taskService, txtconfig.Defaults(), nil)
+	_, libraryService, taskService, settingsService, book := newGenerationTest(t)
+	service := NewService(libraryService, taskService, settingsService)
 	tasks, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +185,7 @@ func TestGenerationFailsWhenImmutableSourceHashChanges(t *testing.T) {
 }
 
 func TestGenerationCanUseReadyRevisionAsImmutableInput(t *testing.T) {
-	storage, libraryService, taskService, book := newGenerationTest(t)
+	storage, libraryService, taskService, settingsService, book := newGenerationTest(t)
 	revisionTask, err := taskService.Create(context.Background(), task.CreateRequest{BookID: book.ID, Type: task.BuildRevisionTXT, InputFileID: book.Original.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +213,7 @@ func TestGenerationCanUseReadyRevisionAsImmutableInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(libraryService, taskService, txtconfig.Defaults(), nil)
+	service := NewService(libraryService, taskService, settingsService)
 	inputs, err := service.Inputs(context.Background(), book.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +269,11 @@ func TestEPUBGenerationRequiresPersistedReportAndRechecksSource(t *testing.T) {
 	libraryService := library.New(storage)
 	defer libraryService.Close()
 	taskService := task.NewService(storage)
-	service := NewService(libraryService, taskService, txtconfig.Defaults(), nil)
+	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{})
+	if err := settingsService.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(libraryService, taskService, settingsService)
 	valid := generationEPUB(t, false)
 	imported, err := libraryService.Import(context.Background(), library.ImportRequest{Filename: "valid.epub", Reader: bytes.NewReader(valid)})
 	if err != nil {
@@ -331,7 +329,7 @@ func generationEPUB(t *testing.T, broken bool) []byte {
 	return buffer.Bytes()
 }
 
-func newGenerationTest(t *testing.T) (*store.Store, *library.Service, *task.Service, library.Book) {
+func newGenerationTest(t *testing.T) (*store.Store, *library.Service, *task.Service, *appsettings.Service, library.Book) {
 	t.Helper()
 	storage, err := store.Open(t.TempDir())
 	if err != nil {
@@ -345,7 +343,11 @@ func newGenerationTest(t *testing.T) (*store.Store, *library.Service, *task.Serv
 	if err != nil {
 		t.Fatal(err)
 	}
-	return storage, libraryService, task.NewService(storage), result.Book
+	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{})
+	if err := settingsService.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return storage, libraryService, task.NewService(storage), settingsService, result.Book
 }
 
 func waitGenerationStatus(t *testing.T, service *task.Service, id string, want task.Status) task.Task {

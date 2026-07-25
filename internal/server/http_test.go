@@ -567,7 +567,7 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service,
 	if err := settingsService.Initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	generationService := generation.NewService(service, taskService, txtconfig.Defaults(), settingsService)
+	generationService := generation.NewService(service, taskService, settingsService)
 	proofreadService := proofread.NewService(storage, service, taskService, settingsService)
 	handler := NewHandler(service, generationService, taskService, settingsService, proofreadService)
 	handler.CheckCodex = func(context.Context) (string, error) { return "Logged in for test", nil }

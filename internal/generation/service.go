@@ -11,6 +11,7 @@ import (
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/converter"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
@@ -112,21 +113,18 @@ type Parameters struct {
 	DefaultLanguage string                   `json:"default_language"`
 }
 
-type DefaultsProvider interface {
-	ConversionConfig(context.Context) (txtconfig.Config, error)
-}
-
 type Service struct {
 	library  *library.Service
 	tasks    *task.Service
-	base     txtconfig.Config
-	defaults DefaultsProvider
+	settings *appsettings.Service
 	now      func() time.Time
 }
 
-func NewService(libraryService *library.Service, taskService *task.Service, base txtconfig.Config, defaults DefaultsProvider) *Service {
-	txtconfig.Normalize(&base)
-	return &Service{library: libraryService, tasks: taskService, base: base, defaults: defaults, now: time.Now}
+func NewService(libraryService *library.Service, taskService *task.Service, settingsService *appsettings.Service) *Service {
+	if libraryService == nil || taskService == nil || settingsService == nil {
+		panic("generation.NewService requires library, task, and settings services")
+	}
+	return &Service{library: libraryService, tasks: taskService, settings: settingsService, now: time.Now}
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, error) {
@@ -221,13 +219,9 @@ func (s *Service) assessInput(ctx context.Context, input library.File) (InputAss
 }
 
 func (s *Service) parameters(ctx context.Context, input library.File, format string, opts Options) (Parameters, error) {
-	cfg := s.base
-	if s.defaults != nil {
-		var err error
-		cfg, err = s.defaults.ConversionConfig(ctx)
-		if err != nil {
-			return Parameters{}, err
-		}
+	cfg, err := s.settings.ConversionConfig(ctx)
+	if err != nil {
+		return Parameters{}, err
 	}
 	cfg.Metadata.Title = firstNonBlank(opts.Title, strings.TrimSuffix(input.DisplayName, filepath.Ext(input.DisplayName)))
 	if strings.TrimSpace(opts.Author) != "" {
