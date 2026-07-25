@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type ActiveTasksError struct {
@@ -14,16 +15,21 @@ type ActiveTasksError struct {
 	Count  int
 }
 
+type bookDeletionPaths struct {
+	files           []string
+	proofreadStates []string
+}
+
 func (e *ActiveTasksError) Error() string {
 	return fmt.Sprintf("book_has_active_tasks: book %s has %d queued or running task(s)", e.BookID, e.Count)
 }
 
 func (s *Store) DeleteBook(ctx context.Context, bookID string) error {
-	relPaths, err := s.beginBookDeletion(ctx, bookID)
+	paths, err := s.beginBookDeletion(ctx, bookID)
 	if err != nil {
 		return err
 	}
-	if err := s.removeLibraryFiles(relPaths); err != nil {
+	if err := s.removeBookResources(bookID, paths); err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `DELETE FROM books WHERE id = ? AND state = 'deleting'`, bookID)
@@ -58,51 +64,39 @@ func (s *Store) DeleteArtifact(ctx context.Context, fileID string) error {
 	return err
 }
 
-func (s *Store) beginBookDeletion(ctx context.Context, bookID string) ([]string, error) {
+func (s *Store) beginBookDeletion(ctx context.Context, bookID string) (bookDeletionPaths, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return bookDeletionPaths{}, err
 	}
 	defer tx.Rollback()
 	var state string
 	if err := tx.QueryRowContext(ctx, `SELECT state FROM books WHERE id = ?`, bookID).Scan(&state); errors.Is(err, sql.ErrNoRows) {
-		return nil, os.ErrNotExist
+		return bookDeletionPaths{}, os.ErrNotExist
 	} else if err != nil {
-		return nil, err
+		return bookDeletionPaths{}, err
 	}
 	var active int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE book_id = ? AND status IN ('queued', 'running')`, bookID).Scan(&active); err != nil {
-		return nil, err
+		return bookDeletionPaths{}, err
 	}
 	if active != 0 {
-		return nil, &ActiveTasksError{BookID: bookID, Count: active}
+		return bookDeletionPaths{}, &ActiveTasksError{BookID: bookID, Count: active}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE books SET state = 'deleting' WHERE id = ?`, bookID); err != nil {
-		return nil, err
+		return bookDeletionPaths{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE files SET state = 'deleting' WHERE book_id = ?`, bookID); err != nil {
-		return nil, err
+		return bookDeletionPaths{}, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT rel_path FROM files WHERE book_id = ?`, bookID)
+	paths, err := collectBookDeletionPaths(ctx, tx, bookID)
 	if err != nil {
-		return nil, err
-	}
-	var relPaths []string
-	for rows.Next() {
-		var relPath string
-		if err := rows.Scan(&relPath); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		relPaths = append(relPaths, relPath)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
+		return bookDeletionPaths{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return bookDeletionPaths{}, err
 	}
-	return relPaths, nil
+	return paths, nil
 }
 
 func (s *Store) reconcileDeletingBooks(ctx context.Context) error {
@@ -123,23 +117,11 @@ func (s *Store) reconcileDeletingBooks(ctx context.Context) error {
 		return err
 	}
 	for _, id := range ids {
-		fileRows, err := s.db.QueryContext(ctx, `SELECT rel_path FROM files WHERE book_id = ?`, id)
+		paths, err := collectBookDeletionPaths(ctx, s.db, id)
 		if err != nil {
 			return err
 		}
-		var relPaths []string
-		for fileRows.Next() {
-			var relPath string
-			if err := fileRows.Scan(&relPath); err != nil {
-				fileRows.Close()
-				return err
-			}
-			relPaths = append(relPaths, relPath)
-		}
-		if err := fileRows.Close(); err != nil {
-			return err
-		}
-		if err := s.removeLibraryFiles(relPaths); err != nil {
+		if err := s.removeBookResources(id, paths); err != nil {
 			return err
 		}
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM books WHERE id = ? AND state = 'deleting'`, id); err != nil {
@@ -176,6 +158,65 @@ func (s *Store) reconcileDeletingFiles(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+type deletionPathQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func collectBookDeletionPaths(ctx context.Context, query deletionPathQuerier, bookID string) (bookDeletionPaths, error) {
+	var paths bookDeletionPaths
+	rows, err := query.QueryContext(ctx, `
+SELECT rel_path, 'file' FROM files WHERE book_id = ?
+UNION ALL
+SELECT engine_state_rel_path, 'proofread_state' FROM proofread_runs WHERE book_id = ? AND engine_state_rel_path <> ''
+`, bookID, bookID)
+	if err != nil {
+		return bookDeletionPaths{}, err
+	}
+	for rows.Next() {
+		var relPath, kind string
+		if err := rows.Scan(&relPath, &kind); err != nil {
+			rows.Close()
+			return bookDeletionPaths{}, err
+		}
+		if kind == "proofread_state" {
+			paths.proofreadStates = append(paths.proofreadStates, relPath)
+		} else {
+			paths.files = append(paths.files, relPath)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return bookDeletionPaths{}, err
+	}
+	return paths, nil
+}
+
+func (s *Store) removeBookResources(bookID string, paths bookDeletionPaths) error {
+	if err := s.removeLibraryFiles(paths.files); err != nil {
+		return err
+	}
+	for _, relPath := range paths.proofreadStates {
+		if !validProofreadStatePath(bookID, relPath) {
+			return fmt.Errorf("invalid proofread state path %q for book %q", relPath, bookID)
+		}
+		path, err := s.ResolveRel(relPath)
+		if err != nil {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		removeEmptyParents(filepath.Dir(path), s.root)
+	}
+	return nil
+}
+
+func validProofreadStatePath(bookID, relPath string) bool {
+	clean := filepath.ToSlash(filepath.Clean(relPath))
+	parts := strings.Split(clean, "/")
+	return clean == relPath && len(parts) == 4 &&
+		parts[0] == "proofreads" && parts[1] == bookID && parts[2] != "" && parts[3] == "state"
 }
 
 func (s *Store) removeLibraryFiles(relPaths []string) error {

@@ -50,6 +50,7 @@ func TestOpenCompletesInterruptedBookDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalPath, _ := storage.ResolveRel(book.Original.RelPath)
+	proofreadStatePath := committedProofreadState(t, storage, book)
 	if _, err := storage.beginBookDeletion(context.Background(), book.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +65,65 @@ func TestOpenCompletesInterruptedBookDeletion(t *testing.T) {
 	if _, err := os.Stat(originalPath); !os.IsNotExist(err) {
 		t.Fatalf("interrupted deletion left original: %v", err)
 	}
+	if _, err := os.Stat(proofreadStatePath); !os.IsNotExist(err) {
+		t.Fatalf("interrupted deletion left proofread state: %v", err)
+	}
 	if _, ok, err := reopened.Book(context.Background(), book.ID); err != nil || ok {
 		t.Fatalf("interrupted deletion left book: %v, %v", ok, err)
 	}
+}
+
+func TestDeleteBookRemovesProofreadEngineState(t *testing.T) {
+	storage, book := deletionFixture(t)
+	statePath := committedProofreadState(t, storage, book)
+	if err := storage.DeleteBook(context.Background(), book.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("deleted proofread state still exists: %v", err)
+	}
+}
+
+func committedProofreadState(t *testing.T, storage *Store, book Book) string {
+	t.Helper()
+	created, err := storage.CreateTask(context.Background(), CreateTaskParams{BookID: book.ID, Type: "proofread", InputFileID: book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{"proofread"}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	workRel := filepath.ToSlash(filepath.Join("work", created.ID, "proofread-state"))
+	workPath, err := storage.ResolveRel(workRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workPath, "candidates.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.CommitProofreadRun(context.Background(), ProofreadRunRecord{
+		ID: runID, BookID: book.ID, SourceFileID: book.Original.ID, TaskID: created.ID,
+		SourceSHA256: book.Original.SHA256, Format: "txt", BatchSize: 12000, Concurrency: 3,
+		EngineVersion: "test", CreatedAt: time.Now(),
+	}, nil, workRel, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	run, ok, err := storage.ProofreadRun(context.Background(), runID)
+	if err != nil || !ok {
+		t.Fatalf("proofread run = %#v, %v, %v", run, ok, err)
+	}
+	statePath, err := storage.ResolveRel(run.EngineStateRelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return statePath
 }
 
 func TestDeleteArtifactPreservesOriginalAndBook(t *testing.T) {
