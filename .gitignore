@@ -2,3 +2,18 @@ kindle2flashdict
 kindle2flashdict.toml
 flashdict-cards.json
 review.jsonl
+
+# Local configuration and generated library data.
+kindle-go.toml
+kindle-go-library/
+
+# Local proofreader/converter artifacts.
+/*.txt
+/*.azw3
+/*_校对版.txt
+/*_校对报告.md
+/*_校对审计.jsonl
+
+# Editor and Python runtime artifacts.
+.DS_Store
+**/__pycache__/
