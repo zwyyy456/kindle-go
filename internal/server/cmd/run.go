@@ -94,16 +94,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	if stdout != nil {
 		handler.Logger = log.New(stdout, "", log.LstdFlags)
 	}
-	srv := server.Server{
-		Config: server.Config{
-			WebAddr:    *webAddr,
-			KindleAddr: *kindleAddr,
-			LibraryDir: *libraryDir,
-		},
-		Handler: handler,
-		Runner:  runner,
-		Stdout:  stdout,
-	}
+	srv := server.NewServer(server.Config{WebAddr: *webAddr, KindleAddr: *kindleAddr}, handler, runner, stdout)
 	return srv.Run()
 }
 

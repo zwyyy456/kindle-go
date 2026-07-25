@@ -9,19 +9,27 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
 type Config struct {
 	WebAddr    string
 	KindleAddr string
-	LibraryDir string
 }
 
 type Server struct {
-	Config  Config
-	Handler Handler
-	Runner  interface{ Run(context.Context) error }
-	Stdout  io.Writer
+	config  Config
+	handler Handler
+	runner  *task.Runner
+	stdout  io.Writer
+}
+
+func NewServer(config Config, handler Handler, runner *task.Runner, stdout io.Writer) Server {
+	if runner == nil {
+		panic("server.NewServer requires a task runner")
+	}
+	return Server{config: config, handler: handler, runner: runner, stdout: stdout}
 }
 
 func (s Server) Run() error {
@@ -31,25 +39,23 @@ func (s Server) Run() error {
 func (s Server) RunContext(ctx context.Context) error {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	if preparer, ok := s.Runner.(interface{ Prepare(context.Context) error }); ok {
-		if err := preparer.Prepare(runCtx); err != nil {
-			return err
-		}
+	if err := s.runner.Prepare(runCtx); err != nil {
+		return err
 	}
-	webAddr := s.Config.WebAddr
+	webAddr := s.config.WebAddr
 	if webAddr == "" {
 		webAddr = ":8787"
 	}
-	kindleAddr := s.Config.KindleAddr
+	kindleAddr := s.config.KindleAddr
 	if kindleAddr == "" {
 		kindleAddr = ":8788"
 	}
-	if s.Stdout != nil {
-		printURLs(s.Stdout, webAddr, kindleAddr)
+	if s.stdout != nil {
+		printURLs(s.stdout, webAddr, kindleAddr)
 	}
 
-	webServer := &http.Server{Addr: webAddr, Handler: s.Handler.WebMux()}
-	kindleServer := &http.Server{Addr: kindleAddr, Handler: s.Handler.KindleMux()}
+	webServer := &http.Server{Addr: webAddr, Handler: s.handler.WebMux()}
+	kindleServer := &http.Server{Addr: kindleAddr, Handler: s.handler.KindleMux()}
 	errCh := make(chan error, 3)
 	go func() {
 		errCh <- webServer.ListenAndServe()
@@ -58,13 +64,11 @@ func (s Server) RunContext(ctx context.Context) error {
 		errCh <- kindleServer.ListenAndServe()
 	}()
 	runnerDone := make(chan error, 1)
-	if s.Runner != nil {
-		go func() {
-			err := s.Runner.Run(runCtx)
-			runnerDone <- err
-			errCh <- err
-		}()
-	}
+	go func() {
+		err := s.runner.Run(runCtx)
+		runnerDone <- err
+		errCh <- err
+	}()
 	var runErr error
 	select {
 	case <-ctx.Done():
@@ -76,16 +80,14 @@ func (s Server) RunContext(ctx context.Context) error {
 	defer cancel()
 	_ = webServer.Shutdown(shutdownCtx)
 	_ = kindleServer.Shutdown(shutdownCtx)
-	if s.Runner != nil {
-		select {
-		case runnerErr := <-runnerDone:
-			if runErr == nil && runnerErr != nil {
-				runErr = runnerErr
-			}
-		case <-shutdownCtx.Done():
-			if runErr == nil {
-				runErr = fmt.Errorf("task runner did not stop before shutdown timeout")
-			}
+	select {
+	case runnerErr := <-runnerDone:
+		if runErr == nil && runnerErr != nil {
+			runErr = runnerErr
+		}
+	case <-shutdownCtx.Done():
+		if runErr == nil {
+			runErr = fmt.Errorf("task runner did not stop before shutdown timeout")
 		}
 	}
 	if errors.Is(runErr, http.ErrServerClosed) {
