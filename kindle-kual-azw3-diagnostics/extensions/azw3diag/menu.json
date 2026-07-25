@@ -1,0 +1,38 @@
+{
+  "items": [
+    {
+      "name": "AZW3 diagnostics",
+      "priority": 900,
+      "items": [
+        {
+          "name": "Start capture",
+          "priority": 10,
+          "action": "./start.sh",
+          "exitmenu": false,
+          "refresh": false
+        },
+        {
+          "name": "Dump JVM and snapshot",
+          "priority": 20,
+          "action": "./snapshot.sh",
+          "exitmenu": false,
+          "refresh": false
+        },
+        {
+          "name": "Collect after reboot",
+          "priority": 30,
+          "action": "./postboot.sh",
+          "exitmenu": false,
+          "refresh": false
+        },
+        {
+          "name": "Stop capture",
+          "priority": 40,
+          "action": "./stop.sh",
+          "exitmenu": false,
+          "refresh": false
+        }
+      ]
+    }
+  ]
+}
