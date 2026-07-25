@@ -144,6 +144,21 @@ func (s *Service) DownloadFile(ctx context.Context, id string) (string, File, er
 	return path, fileFromStore(file), err
 }
 
+func (s *Service) DownloadKindleFile(ctx context.Context, id string, showEPUB bool) (string, File, error) {
+	books, err := s.LatestKindleFiles(ctx, showEPUB)
+	if err != nil {
+		return "", File{}, err
+	}
+	for _, book := range books {
+		for _, file := range book.Files {
+			if file.ID == id {
+				return s.DownloadFile(ctx, id)
+			}
+		}
+	}
+	return "", File{}, os.ErrNotExist
+}
+
 func (s *Service) DeleteBook(ctx context.Context, id string) error {
 	return s.store.DeleteBook(ctx, id)
 }

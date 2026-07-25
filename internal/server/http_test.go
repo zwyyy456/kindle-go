@@ -310,6 +310,11 @@ func TestDownloadsUseFileIDAndKindleMuxRemainsReadOnly(t *testing.T) {
 	if legacy.Code != http.StatusNotFound {
 		t.Fatalf("legacy download status = %d", legacy.Code)
 	}
+	kindleOriginal := httptest.NewRecorder()
+	handler.KindleMux().ServeHTTP(kindleOriginal, httptest.NewRequest(http.MethodGet, "/files/"+result.Book.Original.ID+"/download", nil))
+	if kindleOriginal.Code != http.StatusNotFound {
+		t.Fatalf("Kindle original download status = %d", kindleOriginal.Code)
+	}
 	kindleMutation := httptest.NewRecorder()
 	handler.KindleMux().ServeHTTP(kindleMutation, httptest.NewRequest(http.MethodGet, "/tasks", nil))
 	if kindleMutation.Code != http.StatusNotFound {
@@ -343,17 +348,28 @@ func TestBookDeletionRequiresConfirmationAndRemovesBook(t *testing.T) {
 
 func TestTXTPreviewUsesSubmittedParameters(t *testing.T) {
 	handler, service, _, _ := newHTTPTestHandler(t)
-	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章 开始\n\n正文。")})
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章 开始\n广告\n正文。")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{"title": {"预览标题"}, "split_level": {"1"}}
+	form := url.Values{
+		"title": {"预览标题"}, "split_level": {"1"},
+		"drop_regex": {`^广告$`}, "replace_json": {`[{"pattern":"正文","with":"内容"}]`},
+	}
 	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/txt-preview", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "utf-8") || !strings.Contains(response.Body.String(), "第一章 开始") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "utf-8") || !strings.Contains(response.Body.String(), "第一章 开始") || !strings.Contains(response.Body.String(), "dropped 1") {
 		t.Fatalf("preview = %d, %q", response.Code, response.Body.String())
+	}
+	invalid := url.Values{"replace_json": {"not-json"}}
+	invalidRequest := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/txt-preview", strings.NewReader(invalid.Encode()))
+	invalidRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	invalidResponse := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusBadRequest || !strings.Contains(invalidResponse.Body.String(), "replacement rules must be valid JSON") {
+		t.Fatalf("invalid replacement rules = %d, %q", invalidResponse.Code, invalidResponse.Body.String())
 	}
 }
 
@@ -397,6 +413,11 @@ func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
 	if strings.Contains(before.Body.String(), result.Book.DisplayName) {
 		t.Fatalf("EPUB shown before toggle: %q", before.Body.String())
 	}
+	blockedDownload := httptest.NewRecorder()
+	handler.KindleMux().ServeHTTP(blockedDownload, httptest.NewRequest(http.MethodGet, "/files/"+result.Book.Original.ID+"/download", nil))
+	if blockedDownload.Code != http.StatusNotFound {
+		t.Fatalf("EPUB download before toggle status = %d", blockedDownload.Code)
+	}
 	values, err := handler.Settings.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -421,6 +442,11 @@ func TestSettingsPageAndKindleEPUBToggleTakeEffectImmediately(t *testing.T) {
 	if after.Code != http.StatusOK || !strings.Contains(after.Body.String(), result.Book.DisplayName) || !strings.Contains(after.Body.String(), "EPUB") {
 		t.Fatalf("EPUB after toggle = %d, %q", after.Code, after.Body.String())
 	}
+	allowedDownload := httptest.NewRecorder()
+	handler.KindleMux().ServeHTTP(allowedDownload, httptest.NewRequest(http.MethodGet, "/files/"+result.Book.Original.ID+"/download", nil))
+	if allowedDownload.Code != http.StatusOK || !bytes.Equal(allowedDownload.Body.Bytes(), data) {
+		t.Fatalf("EPUB download after toggle = %d, %d bytes", allowedDownload.Code, allowedDownload.Body.Len())
+	}
 	page := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/settings", nil))
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Global settings") || !strings.Contains(page.Body.String(), "Codex CLI") || !strings.Contains(page.Body.String(), "Database schema") || !strings.Contains(page.Body.String(), "same persistent FIFO") {
@@ -440,6 +466,8 @@ func TestBookFormDoesNotPersistPerBookConversionSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	values.Style.LineHeight = 1.9
+	values.TXT.DropRegex = []string{`^全局广告$`}
+	values.TXT.Replace = []txtconfig.ReplaceRule{{Pattern: "全局错字", With: "全局正字"}}
 	if err := handler.Settings.Save(context.Background(), values); err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +475,11 @@ func TestBookFormDoesNotPersistPerBookConversionSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{"format": {"epub"}, "line_height": {"2.4"}}
+	form := url.Values{
+		"format": {"epub"}, "line_height": {"2.4"},
+		"drop_regex":   {"^本次广告$\n^本次推广$"},
+		"replace_json": {`[{"pattern":"本次错字","with":"本次正字"}]`},
+	}
 	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/generate", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -463,9 +495,18 @@ func TestBookFormDoesNotPersistPerBookConversionSettings(t *testing.T) {
 	if err := json.Unmarshal([]byte(tasks[0].ParametersJSON), &params); err != nil || params.Style.LineHeight != 2.4 {
 		t.Fatalf("task parameters = %#v, %v", params, err)
 	}
+	if len(params.TXT.DropRegex) != 2 || params.TXT.DropRegex[0] != `^本次广告$` || len(params.TXT.Replace) != 1 || params.TXT.Replace[0].Pattern != "本次错字" || params.TXT.Replace[0].With != "本次正字" {
+		t.Fatalf("task cleaning rules = %#v, %#v", params.TXT.DropRegex, params.TXT.Replace)
+	}
 	detail := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/books/"+result.Book.ID, nil))
-	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `name="line_height" value="1.9"`) || strings.Contains(detail.Body.String(), `name="line_height" value="2.4"`) {
+	if detail.Code != http.StatusOK ||
+		!strings.Contains(detail.Body.String(), `name="line_height" value="1.9"`) ||
+		!strings.Contains(detail.Body.String(), `^全局广告$`) ||
+		!strings.Contains(detail.Body.String(), `全局错字`) ||
+		strings.Contains(detail.Body.String(), `name="line_height" value="2.4"`) ||
+		strings.Contains(detail.Body.String(), `^本次广告$`) ||
+		strings.Contains(detail.Body.String(), `本次错字`) {
 		t.Fatalf("book defaults = %d, %q", detail.Code, detail.Body.String())
 	}
 }

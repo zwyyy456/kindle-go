@@ -75,10 +75,14 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 	if err != nil || len(kindle) != 1 || len(kindle[0].Files) != 1 || kindle[0].Files[0].Format != "azw3" {
 		t.Fatalf("Kindle projection = %#v, %v", kindle, err)
 	}
+	if _, downloaded, err := libraryService.DownloadKindleFile(context.Background(), kindle[0].Files[0].ID, false); err != nil || downloaded.ID != kindle[0].Files[0].ID {
+		t.Fatalf("Kindle AZW3 download = %#v, %v", downloaded, err)
+	}
 	kindleWithEPUB, err := libraryService.LatestKindleFiles(context.Background(), true)
 	if err != nil || len(kindleWithEPUB) != 1 || len(kindleWithEPUB[0].Files) != 2 || kindleWithEPUB[0].Files[0].Format != "azw3" || kindleWithEPUB[0].Files[1].Format != "epub" {
 		t.Fatalf("Kindle EPUB projection = %#v, %v", kindleWithEPUB, err)
 	}
+	firstEPUBID := kindleWithEPUB[0].Files[1].ID
 	again, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}, Options: Options{Title: "第二版"}})
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +100,13 @@ func TestCreateSnapshotsParametersAndRunnerGeneratesBothFormats(t *testing.T) {
 	}
 	if artifacts != 3 {
 		t.Fatalf("repeated generation retained %d artifacts, want 3", artifacts)
+	}
+	kindleWithEPUB, err = libraryService.LatestKindleFiles(context.Background(), true)
+	if err != nil || len(kindleWithEPUB) != 1 || len(kindleWithEPUB[0].Files) != 2 || kindleWithEPUB[0].Files[1].ID == firstEPUBID {
+		t.Fatalf("updated Kindle EPUB projection = %#v, %v", kindleWithEPUB, err)
+	}
+	if _, _, err := libraryService.DownloadKindleFile(context.Background(), firstEPUBID, true); !os.IsNotExist(err) {
+		t.Fatalf("historical EPUB remained downloadable from Kindle listener: %v", err)
 	}
 	cancel()
 	select {

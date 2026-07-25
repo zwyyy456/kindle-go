@@ -404,6 +404,9 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 			return
 		}
 		data.Defaults = defaults
+		data.DropRegex = strings.Join(defaults.TXT.DropRegex, "\n")
+		replacements, _ := json.Marshal(defaults.TXT.Replace)
+		data.ReplaceJSON = string(replacements)
 	}
 	if err := bookTemplate.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -447,9 +450,14 @@ func (h Handler) handleGenerate(w http.ResponseWriter, r *http.Request, bookID s
 	if len(formats) == 0 {
 		formats = []string{"azw3"}
 	}
-	_, err := h.Generation.Create(r.Context(), generation.CreateRequest{
+	options, err := generationOptionsFromForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, err = h.Generation.Create(r.Context(), generation.CreateRequest{
 		BookID: bookID, InputFileID: r.Form.Get("input_file_id"), Formats: formats,
-		Options: generationOptionsFromForm(r),
+		Options: options,
 	})
 	if err != nil {
 		http.Redirect(w, r, "/books/"+bookID+"?message="+urlMessage("generate failed: "+err.Error()), http.StatusSeeOther)
@@ -467,7 +475,12 @@ func (h Handler) handleTXTPreview(w http.ResponseWriter, r *http.Request, bookID
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	analysis, err := h.Generation.PreviewTXT(r.Context(), bookID, generationOptionsFromForm(r))
+	options, err := generationOptionsFromForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	analysis, err := h.Generation.PreviewTXT(r.Context(), bookID, options)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -501,14 +514,28 @@ func (h Handler) handleCreateProofread(w http.ResponseWriter, r *http.Request, b
 	http.Redirect(w, r, "/books/"+bookID+"?message=proofread+task+queued", http.StatusSeeOther)
 }
 
-func generationOptionsFromForm(r *http.Request) generation.Options {
-	return generation.Options{
+func generationOptionsFromForm(r *http.Request) (generation.Options, error) {
+	options := generation.Options{
 		Title: r.Form.Get("title"), Author: r.Form.Get("author"), Language: r.Form.Get("language"),
 		H1Regex: r.Form.Get("h1_regex"), H2Regex: r.Form.Get("h2_regex"),
 		SplitLevel: parseInt(r.Form.Get("split_level")), LineHeight: parseFloat(r.Form.Get("line_height")),
 		ParagraphSpacing: r.Form.Get("paragraph_spacing"), ParagraphIndent: r.Form.Get("paragraph_indent"), TextAlign: r.Form.Get("text_align"),
 		Cover: formBool(r, "cover"), MergeLines: formBool(r, "merge_lines"), TrimBlankLines: formBool(r, "trim_blank_lines"),
 	}
+	if r.Form.Has("drop_regex") {
+		dropRegex := nonBlankLines(r.Form.Get("drop_regex"))
+		options.DropRegex = &dropRegex
+	}
+	if r.Form.Has("replace_json") {
+		replacements := []txtconfig.ReplaceRule{}
+		if raw := strings.TrimSpace(r.Form.Get("replace_json")); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &replacements); err != nil {
+				return generation.Options{}, fmt.Errorf("replacement rules must be valid JSON: %w", err)
+			}
+		}
+		options.Replace = &replacements
+	}
+	return options, nil
 }
 
 func formBool(r *http.Request, name string) *bool {
@@ -676,10 +703,25 @@ func (h Handler) handleKindleFileRoute(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.handleDownload(w, r)
+	showEPUB := false
+	if h.Settings != nil {
+		values, err := h.Settings.Current(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		showEPUB = values.KindleShowEPUB
+	}
+	h.handleDownloadWith(w, r, func(ctx context.Context, id string) (string, library.File, error) {
+		return h.Library.DownloadKindleFile(ctx, id, showEPUB)
+	})
 }
 
 func (h Handler) handleDownload(w http.ResponseWriter, r *http.Request) {
+	h.handleDownloadWith(w, r, h.Library.DownloadFile)
+}
+
+func (h Handler) handleDownloadWith(w http.ResponseWriter, r *http.Request, resolve func(context.Context, string) (string, library.File, error)) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -694,7 +736,7 @@ func (h Handler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	path, file, err := h.Library.DownloadFile(r.Context(), fileID)
+	path, file, err := resolve(r.Context(), fileID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -925,6 +967,8 @@ type bookPageData struct {
 	Compatibility    *library.CompatibilityReport
 	CanGenerate      bool
 	Defaults         appsettings.Values
+	DropRegex        string
+	ReplaceJSON      string
 }
 
 type generationInputView struct {
@@ -1177,6 +1221,8 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
       <label>Split level <input type="number" name="split_level" min="1" max="2" value="{{.Defaults.TXT.SplitLevel}}"></label>
       <input type="hidden" name="merge_lines_present" value="1"><label><input type="checkbox" name="merge_lines" value="1" {{if .Defaults.TXT.MergeLines}}checked{{end}}> Merge wrapped lines</label>
       <input type="hidden" name="trim_blank_lines_present" value="1"><label><input type="checkbox" name="trim_blank_lines" value="1" {{if .Defaults.TXT.TrimBlankLines}}checked{{end}}> Compress consecutive blank lines</label>
+      <label>Drop regexes for this build (one per line)<textarea name="drop_regex" rows="4">{{.DropRegex}}</textarea></label>
+      <label>Replacement rules for this build (JSON array)<textarea name="replace_json" rows="4">{{.ReplaceJSON}}</textarea></label>
       <label>Line height <input type="text" name="line_height" value="{{.Defaults.Style.LineHeight}}"></label>
       <label>Paragraph spacing <input type="text" name="paragraph_spacing" value="{{.Defaults.Style.ParagraphSpacing}}"></label>
       <label>Paragraph indent <input type="text" name="paragraph_indent" value="{{.Defaults.Style.ParagraphIndent}}"></label>

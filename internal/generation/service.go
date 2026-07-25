@@ -20,6 +20,8 @@ type Options struct {
 	Language         string
 	H1Regex          string
 	H2Regex          string
+	DropRegex        *[]string
+	Replace          *[]txtconfig.ReplaceRule
 	SplitLevel       int
 	LineHeight       float64
 	ParagraphIndent  string
@@ -179,6 +181,12 @@ func (s *Service) parameters(ctx context.Context, input library.File, format str
 	}
 	if strings.TrimSpace(opts.H2Regex) != "" {
 		cfg.TXT.H2Regex = opts.H2Regex
+	}
+	if opts.DropRegex != nil {
+		cfg.TXT.DropRegex = append([]string(nil), (*opts.DropRegex)...)
+	}
+	if opts.Replace != nil {
+		cfg.TXT.Replace = append([]txtconfig.ReplaceRule(nil), (*opts.Replace)...)
 	}
 	if opts.SplitLevel > 0 {
 		cfg.TXT.SplitLevel = opts.SplitLevel

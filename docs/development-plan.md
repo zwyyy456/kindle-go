@@ -380,7 +380,7 @@ PRAGMA busy_timeout = 5000;
 5. 查询相同 SHA 的原文件；如存在则返回 `duplicate`，临时文件暂不提交。
 6. 用户选择“打开已有书籍”时删除临时文件并重定向。
 7. 用户选择“仍然导入”时创建新的 `book_id` 和原文件记录。
-8. 完成 `pending → ready` 文件提交，再自动执行 TXT 基础分析或 EPUB 兼容性检查。
+8. 完成 `pending → ready` 文件提交；TXT 仅完成编码有效性检查，结构化预览由用户按需触发；EPUB 自动执行兼容性检查。
 
 重复确认通过一次性 import token 关联临时文件，token 只在进程内存保存并在 15 分钟后过期，避免重复上传同一个大文件。
 
@@ -390,7 +390,7 @@ PRAGMA busy_timeout = 5000;
 
 - `ListBooks(Search, Sort, StatusFilter, Page)`。
 - `GetBookDetail(bookID)`，一次返回原文件、最新状态、校对摘要、所有修订、任务和产物。
-- `LatestKindleFiles(showEPUB)`，每本书最多返回最新 AZW3 和可选最新 EPUB。
+- `LatestKindleFiles(showEPUB)`，每本书最多返回最新 AZW3 和可选最新 EPUB；Kindle 首页默认只展示最近 24 小时内导入的书，并提供全部书籍入口。
 - 校对状态从最新成功运行和当前任务派生，不在 `books` 表重复存储。
 
 列表采用稳定分页：默认按 `imported_at DESC, id DESC`，每页 50 本。名称搜索对 `display_name` 做 `LIKE`，v1 不引入全文索引。
@@ -453,6 +453,7 @@ func AnalyzeTXT(path string, cfg config.Config) (TXTAnalysis, error)
 ```
 
 - Web 预览调用 `AnalyzeTXT` 并渲染 TOC/统计。
+- TXT 导入不自动调用 `AnalyzeTXT`；用户可以直接生成，或在需要检查目录和清理规则时按需预览。
 - `converter.Convert` 的 TXT 分支调用同一函数取得 `ebook.Book` 后写 EPUB/AZW3。
 - CLI preview 仅负责把结构化结果打印为现有文本格式。
 - 预览表单参数序列化为规范 JSON；创建任务时把同一份 JSON 写入 `tasks.parameters_json`。
@@ -658,10 +659,10 @@ executor：
 
 只注册：
 
-- `GET /`：最新 AZW3 和可选最新 EPUB。
-- `GET /files/{file-id}/download`：仅允许下载当前 Kindle projection 中可见的 ready artifact。
+- `GET /`：最近 24 小时内导入书籍的最新 AZW3 和可选最新 EPUB；查询参数可切换全部书籍。
+- `GET /files/{file-id}/download`：仅允许下载当前 Kindle projection 中可见的 ready 文件，包括最新产物、开启 EPUB 后选中的 EPUB，以及迁移保留的 Kindle 格式原文件。
 
-Kindle mux 不注册上传、任务、设置、删除、原文件或历史产物路由。
+Kindle mux 不注册上传、任务、设置或删除路由；下载路由不能访问原始 TXT、报告、审计文件或历史产物。
 
 ### 9.3 模板与轮询
 
@@ -881,7 +882,7 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 
 ### 11.2 切片二
 
-- TXT 预览展示编码、目录、段落和清理统计。
+- TXT 可以不预览直接生成；按需预览时展示编码、目录、段落和清理统计。
 - 参数修改后预览与最终产物使用相同章节结构。
 - 新书预览从全局默认值开始，不保存书籍级设置。
 - 历史产物参数快照不因全局设置变化而变化。

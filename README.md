@@ -169,7 +169,8 @@ Kindle:
   http://192.168.1.23:8788/
 ```
 
-Use the desktop Web UI to import immutable TXT/EPUB source copies. TXT preview is synchronous;
+Use the desktop Web UI to import immutable TXT/EPUB source copies. TXT import only checks that
+the encoding is readable; the full structural preview is synchronous and runs only when requested.
 EPUB import saves a structured AZW3 compatibility report. EPUB/AZW3 generation runs in the
 persistent background task queue, and every successful output and its parameter snapshot is kept.
 Failed or canceled tasks can be retried from the beginning.
@@ -207,10 +208,12 @@ saved as book-level configuration.
 The Web UI and Kindle page intentionally have no authentication because v1 treats the local LAN as
 trusted. Do not bind or forward these ports to an untrusted or public network.
 
-The Kindle page is deliberately plain HTML. By default it lists the latest AZW3 for each book.
-When “Show latest EPUB” is enabled globally, the latest EPUB is shown alongside the AZW3 for
-KOReader and similar readers. Legacy MOBI/PDF originals remain downloadable after library
-migration.
+The Kindle page is deliberately plain HTML. By default it lists the latest AZW3 for books imported
+in the last 24 hours, with an option to show all books. When “Show latest EPUB” is enabled globally,
+the latest EPUB is shown alongside the AZW3 for the same set of books. Legacy MOBI/PDF originals
+remain downloadable after library migration. The Kindle listener only serves files selected by
+this latest-file projection; original TXT files, reports, audits, and historical artifacts remain
+available only from the desktop Web UI.
 
 Before a release, run `tools/test.sh`. The remaining environment checks are manual: complete one
 real Codex TXT run, one real Codex EPUB run, and verify Chinese book browsing plus AZW3 download on
