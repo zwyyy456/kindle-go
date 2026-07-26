@@ -43,9 +43,9 @@ func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "Generate") {
 		t.Fatalf("detail = %d, %q", detail.Code, detail.Body.String())
 	}
-	books, err := service.AllBooks(context.Background())
-	if err != nil || len(books) != 1 {
-		t.Fatalf("books = %d, %v", len(books), err)
+	books := allHTTPTestBooks(t, service)
+	if len(books) != 1 {
+		t.Fatalf("books = %d", len(books))
 	}
 
 	old := httptest.NewRecorder()
@@ -64,9 +64,9 @@ func TestImportAndDownloadLogsContainOnlyFileMetadata(t *testing.T) {
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("import status = %d", response.Code)
 	}
-	books, err := service.AllBooks(context.Background())
-	if err != nil || len(books) != 1 {
-		t.Fatalf("books = %#v, %v", books, err)
+	books := allHTTPTestBooks(t, service)
+	if len(books) != 1 {
+		t.Fatalf("books = %#v", books)
 	}
 	download := httptest.NewRecorder()
 	handler.WebMux().ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/files/"+books[0].Original.ID+"/download", nil))
@@ -117,9 +117,9 @@ func TestWebDuplicateConfirmationIsOneTime(t *testing.T) {
 			t.Fatalf("replay location = %q", replayed.Header().Get("Location"))
 		}
 	}
-	books, err := service.AllBooks(context.Background())
-	if err != nil || len(books) != 2 {
-		t.Fatalf("books = %d, %v", len(books), err)
+	books := allHTTPTestBooks(t, service)
+	if len(books) != 2 {
+		t.Fatalf("books = %d", len(books))
 	}
 }
 
@@ -563,7 +563,7 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service,
 	service := library.New(storage)
 	t.Cleanup(func() { _ = service.Close() })
 	taskService := task.NewService(storage)
-	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{LibraryDir: service.Root(), LibrarySource: "test"})
+	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{LibraryDir: storage.Root(), LibrarySource: "test"})
 	if err := settingsService.Initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -575,6 +575,15 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service,
 		return proofread.DependencyDiagnostics{PythonPath: "/python3", PythonVersion: "Python test", CodexPath: "/codex", CodexVersion: "codex test"}
 	}
 	return handler, service, taskService, storage
+}
+
+func allHTTPTestBooks(t *testing.T, service *library.Service) []library.Book {
+	t.Helper()
+	page, err := service.ListBooks(context.Background(), library.BookQuery{PageSize: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page.Books
 }
 
 func multipartRequest(t *testing.T, target, name, content string) *http.Request {

@@ -10,7 +10,6 @@ import (
 	"github.com/flashdict/kindle2flashdict/internal/library"
 	"github.com/flashdict/kindle2flashdict/internal/proofread"
 	appsettings "github.com/flashdict/kindle2flashdict/internal/settings"
-	"github.com/flashdict/kindle2flashdict/internal/store"
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
@@ -160,7 +159,7 @@ type settingsPageData struct {
 	Message     string
 	DropRegex   string
 	ReplaceJSON string
-	System      store.Diagnostics
+	System      library.Diagnostics
 	SystemFree  string
 }
 

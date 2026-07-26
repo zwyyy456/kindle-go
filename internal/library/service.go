@@ -48,8 +48,6 @@ func (s *Service) Close() error {
 	return s.store.Close()
 }
 
-func (s *Service) Root() string { return s.store.Root() }
-
 func (s *Service) GetBook(ctx context.Context, id string) (Book, bool, error) {
 	book, ok, err := s.store.Book(ctx, id)
 	return bookFromStore(book), ok, err
@@ -60,8 +58,17 @@ func (s *Service) GetFile(ctx context.Context, id string) (File, bool, error) {
 	return fileFromStore(file), ok, err
 }
 
-func (s *Service) Diagnostics(ctx context.Context) (store.Diagnostics, error) {
-	return s.store.Diagnostics(ctx)
+func (s *Service) Diagnostics(ctx context.Context) (Diagnostics, error) {
+	value, err := s.store.Diagnostics(ctx)
+	if err != nil {
+		return Diagnostics{}, err
+	}
+	return Diagnostics{
+		SchemaVersion: value.SchemaVersion, JournalMode: value.JournalMode,
+		LibraryWritable: value.LibraryWritable, FreeBytes: value.FreeBytes,
+		QueuedGeneration: value.QueuedGeneration, RunningGeneration: value.RunningGeneration,
+		QueuedProofread: value.QueuedProofread, RunningProofread: value.RunningProofread,
+	}, nil
 }
 
 func (s *Service) CompatibilityForFile(ctx context.Context, fileID string) (CompatibilityReport, bool, error) {
@@ -137,15 +144,21 @@ func (s *Service) DownloadFile(ctx context.Context, id string) (string, File, er
 }
 
 func (s *Service) DownloadKindleFile(ctx context.Context, id string, showEPUB bool) (string, File, error) {
-	books, err := s.LatestKindleFiles(ctx, showEPUB)
+	candidate, ok, err := s.store.File(ctx, id)
 	if err != nil {
 		return "", File{}, err
 	}
-	for _, book := range books {
-		for _, file := range book.Files {
-			if file.ID == id {
-				return s.DownloadFile(ctx, id)
-			}
+	if !ok {
+		return "", File{}, os.ErrNotExist
+	}
+	files, err := s.store.FilesForBook(ctx, candidate.BookID)
+	if err != nil {
+		return "", File{}, err
+	}
+	for _, file := range kindleFileRecords(files, showEPUB) {
+		if file.ID == id {
+			path, err := s.store.ResolveRel(file.RelPath)
+			return path, fileFromStore(file), err
 		}
 	}
 	return "", File{}, os.ErrNotExist
@@ -164,29 +177,20 @@ func (s *Service) LatestKindleFiles(ctx context.Context, showEPUB bool) ([]Kindl
 	if err != nil {
 		return nil, err
 	}
+	files, err := s.store.ReadyFilesForActiveBooks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filesByBook := make(map[string][]store.File)
+	for _, file := range files {
+		filesByBook[file.BookID] = append(filesByBook[file.BookID], file)
+	}
 	var result []KindleBook
 	for _, storedBook := range books {
-		files, err := s.store.FilesForBook(ctx, storedBook.ID)
-		if err != nil {
-			return nil, err
-		}
-		var selected []File
-		for _, file := range files {
-			if file.Role == "artifact" && file.Format == "azw3" {
-				selected = append(selected, fileFromStore(file))
-				break
-			}
-		}
-		if showEPUB {
-			for _, file := range files {
-				if file.Format == "epub" && (file.Role == "artifact" || file.Role == "revision" || file.Role == "original") {
-					selected = append(selected, fileFromStore(file))
-					break
-				}
-			}
-		}
-		if len(selected) == 0 && kindleLegacyOriginalFormat(storedBook.Original.Format) {
-			selected = append(selected, fileFromStore(storedBook.Original))
+		selectedRecords := kindleFileRecords(filesByBook[storedBook.ID], showEPUB)
+		selected := make([]File, 0, len(selectedRecords))
+		for _, file := range selectedRecords {
+			selected = append(selected, fileFromStore(file))
 		}
 		if len(selected) != 0 {
 			result = append(result, KindleBook{Book: bookFromStore(storedBook), Files: selected})
@@ -195,9 +199,31 @@ func (s *Service) LatestKindleFiles(ctx context.Context, showEPUB bool) ([]Kindl
 	return result, nil
 }
 
-func (s *Service) AllBooks(ctx context.Context) ([]Book, error) {
-	books, err := s.store.AllBooks(ctx)
-	return booksFromStore(books), err
+func kindleFileRecords(files []store.File, showEPUB bool) []store.File {
+	var azw3, epub, original store.File
+	for _, file := range files {
+		if original.ID == "" && file.Role == "original" {
+			original = file
+		}
+		if azw3.ID == "" && file.Role == "artifact" && file.Format == "azw3" {
+			azw3 = file
+		}
+		if showEPUB && epub.ID == "" && file.Format == "epub" &&
+			(file.Role == "artifact" || file.Role == "revision" || file.Role == "original") {
+			epub = file
+		}
+	}
+	var selected []store.File
+	if azw3.ID != "" {
+		selected = append(selected, azw3)
+	}
+	if epub.ID != "" {
+		selected = append(selected, epub)
+	}
+	if len(selected) == 0 && kindleLegacyOriginalFormat(original.Format) {
+		selected = append(selected, original)
+	}
+	return selected
 }
 
 func (s *Service) ListBooks(ctx context.Context, query BookQuery) (BookPage, error) {

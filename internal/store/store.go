@@ -68,6 +68,26 @@ func (s *Store) FilesForBook(ctx context.Context, bookID string) ([]File, error)
 	return files, rows.Err()
 }
 
+func (s *Store) ReadyFilesForActiveBooks(ctx context.Context) ([]File, error) {
+	rows, err := s.db.QueryContext(ctx, fileSelect+`
+WHERE state = 'ready'
+  AND book_id IN (SELECT id FROM books WHERE state = 'active')
+ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []File
+	for rows.Next() {
+		file, err := scanFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, rows.Err()
+}
+
 const fileSelect = `SELECT id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, COALESCE(source_file_id, ''), COALESCE(task_id, ''), COALESCE(proofread_run_id, ''), COALESCE(parameters_json, ''), has_unresolved, created_at FROM files`
 
 func scanFile(row rowScanner) (File, error) {

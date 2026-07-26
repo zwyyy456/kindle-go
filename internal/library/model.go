@@ -53,6 +53,15 @@ type KindleBook struct {
 	Files []File
 }
 
+type Diagnostics struct {
+	SchemaVersion                       int
+	JournalMode                         string
+	LibraryWritable                     bool
+	FreeBytes                           uint64
+	QueuedGeneration, RunningGeneration int
+	QueuedProofread, RunningProofread   int
+}
+
 type BookQuery struct {
 	Search       string
 	Sort         string

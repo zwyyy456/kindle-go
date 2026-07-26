@@ -27,9 +27,9 @@ func TestImportEnforcesExactTXTLimitWithoutResidue(t *testing.T) {
 	if ErrorCode(err) != "upload_too_large" {
 		t.Fatalf("oversize error = %v", err)
 	}
-	books, err := service.AllBooks(context.Background())
-	if err != nil || len(books) != 1 {
-		t.Fatalf("books after rejected import = %d, %v", len(books), err)
+	books := allTestBooks(t, service)
+	if len(books) != 1 {
+		t.Fatalf("books after rejected import = %d", len(books))
 	}
 	assertIncomingCount(t, root, 0)
 }
@@ -68,9 +68,9 @@ func TestImportEnforcesExactEPUBLimitWithoutResidue(t *testing.T) {
 	if ErrorCode(err) != "upload_too_large" {
 		t.Fatalf("oversize error = %v", err)
 	}
-	books, err := service.AllBooks(context.Background())
-	if err != nil || len(books) != 1 {
-		t.Fatalf("books after rejected import = %d, %v", len(books), err)
+	books := allTestBooks(t, service)
+	if len(books) != 1 {
+		t.Fatalf("books after rejected import = %d", len(books))
 	}
 	assertIncomingCount(t, root, 0)
 }
@@ -154,9 +154,9 @@ func TestDuplicateImportCanOpenExistingOrCreateNewBook(t *testing.T) {
 	if err != nil || created.ID == first.Book.ID {
 		t.Fatalf("explicit duplicate = %#v, %v", created, err)
 	}
-	books, err := service.AllBooks(context.Background())
-	if err != nil || len(books) != 2 {
-		t.Fatalf("books = %d, %v", len(books), err)
+	books := allTestBooks(t, service)
+	if len(books) != 2 {
+		t.Fatalf("books = %d", len(books))
 	}
 }
 
@@ -265,6 +265,15 @@ func newTestService(t *testing.T) (*Service, string) {
 	service := New(storage)
 	t.Cleanup(func() { _ = service.Close() })
 	return service, root
+}
+
+func allTestBooks(t *testing.T, service *Service) []Book {
+	t.Helper()
+	page, err := service.ListBooks(context.Background(), BookQuery{PageSize: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page.Books
 }
 
 func assertIncomingCount(t *testing.T, root string, want int) {
