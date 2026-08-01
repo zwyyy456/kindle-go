@@ -175,21 +175,30 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
 </html>`))
 
 var tasksTemplate = template.Must(template.New("tasks").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Tasks — Kindle Go</title></head><body>
+<html><head><meta charset="utf-8"><title>Tasks — Kindle Go</title><style>
+form.inline { display: inline; }
+</style></head><body>
 <p><a href="/books">← Library</a></p><h1>Tasks</h1>{{if .Message}}<p>{{.Message}}</p>{{end}}
-<table><thead><tr><th>Book</th><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th></tr></thead><tbody>
-{{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td><a href="/tasks/{{.ID}}">{{.Type}}</a></td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
+<table><thead><tr><th>Book</th><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th><th>Actions</th></tr></thead><tbody>
+{{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td><a href="/tasks/{{.ID}}">{{.Type}}</a></td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td><td>
+{{if .CanCancel}}<form class="inline" method="post" action="/tasks/{{.ID}}/cancel"><button type="submit">Cancel</button></form>{{end}}
+{{if .CanRetry}}<form class="inline" method="post" action="/tasks/{{.ID}}/retry"><button type="submit">Retry from beginning</button></form>{{end}}
+</td></tr>{{else}}<tr><td colspan="7">No tasks.</td></tr>{{end}}
 </tbody></table></body></html>`))
 
 var taskDetailTemplate = template.Must(template.New("task-detail").Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Task {{.Task.ID}} — Kindle Go</title><style>
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.45; color: #1f2933; }
 table { width: 100%; border-collapse: collapse; } th, td { text-align: left; border-bottom: 1px solid #d8dee6; padding: 8px; }
-.error { color: #9b1c1c; } .warning { color: #8a5b00; } .muted { color: #627282; }
+.error { color: #9b1c1c; } .warning { color: #8a5b00; } .muted { color: #627282; } form.inline { display: inline; }
 </style></head><body>
 <p><a href="/tasks">← All tasks</a> · <a href="/books/{{.Task.BookID}}">Book</a></p>
 <h1>{{.Task.Type}}</h1><p>Status: <strong>{{.Task.Status}}</strong> · stage: {{.Task.Stage}} · progress: {{.Task.Progress}}</p>
 {{if .Task.Error}}<p class="error">{{.Task.Error}}</p>{{end}}
+<div class="actions">
+{{if .Task.CanCancel}}<form class="inline" method="post" action="/tasks/{{.Task.ID}}/cancel"><button type="submit">Cancel</button></form>{{end}}
+{{if .Task.CanRetry}}<form class="inline" method="post" action="/tasks/{{.Task.ID}}/retry"><button type="submit">Retry from beginning</button></form>{{end}}
+</div>
 <h2>Event timeline</h2><table><thead><tr><th>Time</th><th>Level</th><th>Stage</th><th>Event</th></tr></thead><tbody>
 {{range .Events}}<tr><td>{{.CreatedAt}}</td><td class="{{.Level}}">{{.Level}}</td><td>{{.Stage}}</td><td>{{.Message}}</td></tr>{{else}}<tr><td colspan="4">No events.</td></tr>{{end}}
 </tbody></table></body></html>`))

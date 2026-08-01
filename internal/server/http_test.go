@@ -356,6 +356,47 @@ func TestTaskDetailAndJSONExposePersistedEventTimeline(t *testing.T) {
 	}
 }
 
+func TestTaskPagesExposeCancelAndRetryActions(t *testing.T) {
+	handler, service, taskService, _ := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "actions.txt", Reader: strings.NewReader("正文")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := taskService.Create(context.Background(), task.CreateRequest{BookID: result.Book.ID, Type: task.GenerateEPUB, InputFileID: result.Book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := taskService.Create(context.Background(), task.CreateRequest{BookID: result.Book.ID, Type: task.GenerateAZW3, InputFileID: result.Book.Original.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := taskService.Cancel(context.Background(), canceled.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	list := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/tasks", nil))
+	listBody := list.Body.String()
+	if list.Code != http.StatusOK || !strings.Contains(listBody, "Actions") || !strings.Contains(listBody, "/tasks/"+queued.ID+"/cancel") || !strings.Contains(listBody, "/tasks/"+canceled.ID+"/retry") {
+		t.Fatalf("task list = %d, %s", list.Code, listBody)
+	}
+	if strings.Contains(listBody, "/tasks/"+queued.ID+"/retry") || strings.Contains(listBody, "/tasks/"+canceled.ID+"/cancel") {
+		t.Fatalf("task list exposed invalid actions: %s", listBody)
+	}
+
+	queuedDetail := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(queuedDetail, httptest.NewRequest(http.MethodGet, "/tasks/"+queued.ID, nil))
+	if queuedDetail.Code != http.StatusOK || !strings.Contains(queuedDetail.Body.String(), "/tasks/"+queued.ID+"/cancel") || strings.Contains(queuedDetail.Body.String(), "/tasks/"+queued.ID+"/retry") {
+		t.Fatalf("queued task detail = %d, %s", queuedDetail.Code, queuedDetail.Body.String())
+	}
+
+	canceledDetail := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(canceledDetail, httptest.NewRequest(http.MethodGet, "/tasks/"+canceled.ID, nil))
+	if canceledDetail.Code != http.StatusOK || !strings.Contains(canceledDetail.Body.String(), "/tasks/"+canceled.ID+"/retry") || strings.Contains(canceledDetail.Body.String(), "/tasks/"+canceled.ID+"/cancel") {
+		t.Fatalf("canceled task detail = %d, %s", canceledDetail.Code, canceledDetail.Body.String())
+	}
+}
+
 func TestWebStartsSingleActiveProofreadTaskWithSettingsSnapshot(t *testing.T) {
 	handler, service, taskService, _ := newHTTPTestHandler(t)
 	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文")})
