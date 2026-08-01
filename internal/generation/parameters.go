@@ -9,6 +9,11 @@ import (
 
 const taskParametersVersion = 1
 
+// ParseParameters strictly decodes a persisted generation task snapshot.
+func ParseParameters(raw string) (Parameters, error) {
+	return decodeParameters(raw)
+}
+
 func decodeParameters(raw string) (Parameters, error) {
 	var header struct {
 		SchemaVersion int `json:"version"`

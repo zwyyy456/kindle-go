@@ -9,6 +9,11 @@ import (
 
 const taskParametersVersion = 1
 
+// ParseRevisionParameters strictly decodes a persisted revision task snapshot.
+func ParseRevisionParameters(raw string) (RevisionParameters, error) {
+	return decodeRevisionParameters(raw)
+}
+
 func decodeProofreadParameters(raw string) (Parameters, error) {
 	var params Parameters
 	version, err := decodeVersionedParameters(raw, "proofread", &params)

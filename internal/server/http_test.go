@@ -194,6 +194,89 @@ func TestWebGenerateCreatesTaskAndLegacyConvertRouteIsGone(t *testing.T) {
 	}
 }
 
+func TestBookDetailDisplaysArtifactProvenanceAndParameters(t *testing.T) {
+	handler, service, taskService, storage := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "source.txt", Reader: strings.NewReader("正文")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, err := json.Marshal(generation.Parameters{
+		SchemaVersion: 1, InputFormat: "txt", OutputFormat: "epub",
+		Metadata: txtconfig.MetadataConfig{Title: "产物标题", Author: "作者", Language: "zh-CN"},
+		TXT: txtconfig.TXTConfig{
+			H1Regex: "^H1$", H2Regex: "^H2$", SplitLevel: 2, MergeLines: true, TrimBlankLines: true,
+			DropRegex: []string{"^广告$"}, Replace: []txtconfig.ReplaceRule{{Pattern: "错字", With: "正字"}},
+		},
+		Style: txtconfig.Style{LineHeight: 1.7, ParagraphIndent: "2em", ParagraphSpacing: "0", TextAlign: "justify"},
+		Cover: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := taskService.Create(context.Background(), task.CreateRequest{
+		BookID: result.Book.ID, Type: task.GenerateEPUB, InputFileID: result.Book.Original.ID, ParametersJSON: string(parameters),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{string(task.GenerateEPUB)}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim task = %v, %v", ok, err)
+	}
+	workRel := filepath.ToSlash(filepath.Join("work", created.ID, "artifact.epub"))
+	workPath, err := storage.ResolveRel(workRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(workPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(workPath, []byte("artifact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.CommitArtifact(context.Background(), store.ArtifactCommit{
+		BookID: result.Book.ID, SourceFileID: result.Book.Original.ID, TaskID: created.ID,
+		Format: "epub", DisplayName: "artifact.epub", WorkRelPath: workRel, ParametersJSON: string(parameters), CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/books/"+result.Book.ID, nil))
+	body := response.Body.String()
+	for _, want := range []string{
+		"Source:", "source.txt", "/tasks/" + created.ID, "Parameters", "Input/output: TXT → EPUB", "产物标题",
+		"H1 regex: ^H1$", "H2 regex: ^H2$", "^广告$", "错字", "正字",
+	} {
+		if response.Code != http.StatusOK || !strings.Contains(body, want) {
+			t.Fatalf("book detail = %d, missing %q in %s", response.Code, want, body)
+		}
+	}
+}
+
+func TestParameterSummaryUsesStrictDecodersAndShowsEmptyRules(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		kind task.Type
+		raw  string
+	}{
+		{name: "generation", kind: task.GenerateEPUB, raw: `{"version":1,"unexpected":true}`},
+		{name: "revision", kind: task.BuildRevisionTXT, raw: `{"version":1,"unexpected":true}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := parameterSummary(test.raw, test.kind, proofread.Run{})
+			if len(got) != 1 || got[0] != "Parameter snapshot unavailable" {
+				t.Fatalf("summary for unknown fields = %#v", got)
+			}
+		})
+	}
+
+	summary := generationParameterSummary(generation.Parameters{})
+	joined := strings.Join(summary, "\n")
+	if !strings.Contains(joined, "Drop rules: None") || !strings.Contains(joined, "Replace rules: None") {
+		t.Fatalf("empty rule summary = %#v", summary)
+	}
+}
+
 func TestTaskDetailAndJSONExposePersistedEventTimeline(t *testing.T) {
 	handler, service, taskService, _ := newHTTPTestHandler(t)
 	created, err := service.Import(context.Background(), library.ImportRequest{Filename: "events.txt", Reader: strings.NewReader("正文")})

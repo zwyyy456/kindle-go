@@ -14,6 +14,8 @@ import (
 	txtconfig "github.com/flashdict/kindle2flashdict/internal/config"
 	"github.com/flashdict/kindle2flashdict/internal/generation"
 	"github.com/flashdict/kindle2flashdict/internal/library"
+	"github.com/flashdict/kindle2flashdict/internal/proofread"
+	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
 const recentWindow = 24 * time.Hour
@@ -181,8 +183,18 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	var runs []proofreadRunView
+	runsByID := make(map[string]proofread.Run, len(values))
 	for _, value := range values {
+		runsByID[value.ID] = value
 		runs = append(runs, proofreadRunView{ID: value.ID, Format: strings.ToUpper(value.Format), Model: value.Model, CompletedAt: value.CompletedAt.Format("2006-01-02 15:04")})
+	}
+	tasksByID := make(map[string]task.Task, len(tasks))
+	for _, value := range tasks {
+		tasksByID[value.ID] = value
+	}
+	sourcesByID := make(map[string]library.File, len(detail.Files))
+	for _, file := range detail.Files {
+		sourcesByID[file.ID] = file
 	}
 	generationByFile := make(map[string]generation.InputAssessment)
 	var generationInputs []generation.InputAssessment
@@ -200,6 +212,7 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 	files := make([]fileView, 0, len(detail.Files))
 	for _, file := range detail.Files {
 		view := newFileView(file)
+		enrichFileView(&view, file, sourcesByID, tasksByID, runsByID)
 		if assessment, ok := generationByFile[file.ID]; ok {
 			view.CompatibilityStatus = assessment.CompatibilityStatus
 		}

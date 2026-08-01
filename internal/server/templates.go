@@ -143,8 +143,8 @@ var bookTemplate = template.Must(template.New("book").Parse(`<!doctype html>
   {{end}}
 
   <h2>Files</h2>
-  <table><thead><tr><th>Name</th><th>Role</th><th>Format</th><th>Size</th><th>Created</th></tr></thead><tbody>
-  {{range .Files}}<tr><td><a href="{{.URL}}">{{.Name}}</a>{{if .Unresolved}} <span class="error">(contains unresolved source locations)</span>{{end}}{{if .CompatibilityStatus}} <span class="muted">(EPUB compatibility: {{.CompatibilityStatus}})</span>{{end}}{{if .CanDelete}} <form class="inline" method="post" action="/files/{{.ID}}/delete"><button type="submit">Delete</button></form>{{end}}</td><td>{{.Kind}}</td><td>{{.Format}}</td><td>{{.Size}}</td><td>{{.CreatedAt}}</td></tr>{{else}}<tr><td colspan="5">No files.</td></tr>{{end}}
+  <table><thead><tr><th>Name</th><th>Role</th><th>Format</th><th>Size</th><th>Created</th><th>Source and parameters</th></tr></thead><tbody>
+  {{range .Files}}<tr><td><a href="{{.URL}}">{{.Name}}</a>{{if .Unresolved}} <span class="error">(contains unresolved source locations)</span>{{end}}{{if .CompatibilityStatus}} <span class="muted">(EPUB compatibility: {{.CompatibilityStatus}})</span>{{end}}{{if .CanDelete}} <form class="inline" method="post" action="/files/{{.ID}}/delete"><button type="submit">Delete</button></form>{{end}}</td><td>{{.Kind}}</td><td>{{.Format}}</td><td>{{.Size}}</td><td>{{.CreatedAt}}</td><td>{{if .SourceName}}Source: {{if .SourceURL}}<a href="{{.SourceURL}}">{{.SourceName}}</a>{{else}}{{.SourceName}}{{end}} ({{.SourceRole}})<br>{{end}}{{if .TaskURL}}<a href="{{.TaskURL}}">Task</a>{{end}}{{if .ProofreadURL}} · <a href="{{.ProofreadURL}}">Proofread run</a>{{end}}{{if .ParameterSummary}}<details><summary>Parameters</summary><ul>{{range .ParameterSummary}}<li>{{.}}</li>{{end}}</ul></details>{{end}}</td></tr>{{else}}<tr><td colspan="6">No files.</td></tr>{{end}}
   </tbody></table>
 
   <h2>Tasks</h2>
