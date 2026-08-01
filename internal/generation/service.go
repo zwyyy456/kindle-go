@@ -48,13 +48,25 @@ type InputAssessment struct {
 	CompatibilityStatus string
 }
 
+type UserError struct {
+	err error
+}
+
+func (e *UserError) Error() string { return e.err.Error() }
+
+func (e *UserError) Unwrap() error { return e.err }
+
+func userErrorf(format string, args ...any) error {
+	return &UserError{err: fmt.Errorf(format, args...)}
+}
+
 func (s *Service) PreviewTXT(ctx context.Context, req PreviewRequest) (converter.TXTAnalysis, error) {
 	input, err := s.resolveInput(ctx, req.BookID, req.InputFileID)
 	if err != nil {
 		return converter.TXTAnalysis{}, err
 	}
 	if input.Format != "txt" {
-		return converter.TXTAnalysis{}, fmt.Errorf("TXT preview is only available for TXT books")
+		return converter.TXTAnalysis{}, userErrorf("TXT preview is only available for TXT books")
 	}
 	path, _, err := s.library.ResolveInput(ctx, req.BookID, input.ID, input.SHA256)
 	if err != nil {
@@ -78,7 +90,7 @@ func (s *Service) Inputs(ctx context.Context, bookID string) ([]InputAssessment,
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("book %q not found", bookID)
+		return nil, userErrorf("book %q not found", bookID)
 	}
 	inputs := make([]InputAssessment, 0, len(detail.Files))
 	for _, file := range detail.Files {
@@ -138,12 +150,12 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 	}
 	if !assessment.Available {
 		if input.Format == "epub" {
-			return nil, fmt.Errorf("epub_incompatible: EPUB compatibility report did not pass")
+			return nil, userErrorf("epub_incompatible: EPUB compatibility report did not pass")
 		}
-		return nil, fmt.Errorf("%s files are not convertible", input.Format)
+		return nil, userErrorf("%s files are not convertible", input.Format)
 	}
 	if len(req.Formats) == 0 {
-		return nil, fmt.Errorf("at least one output format is required")
+		return nil, userErrorf("at least one output format is required")
 	}
 	createdAt := s.now()
 	seen := make(map[string]bool)
@@ -151,14 +163,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) ([]task.Task, e
 	for _, rawFormat := range req.Formats {
 		format := strings.ToLower(strings.TrimSpace(rawFormat))
 		if seen[format] {
-			return nil, fmt.Errorf("duplicate output format %q", format)
+			return nil, userErrorf("duplicate output format %q", format)
 		}
 		seen[format] = true
 		if format != "epub" && format != "azw3" {
-			return nil, fmt.Errorf("unsupported output format %q", format)
+			return nil, userErrorf("unsupported output format %q", format)
 		}
 		if input.Format == "epub" && format != "azw3" {
-			return nil, fmt.Errorf("EPUB input can only generate AZW3")
+			return nil, userErrorf("EPUB input can only generate AZW3")
 		}
 		parameters, err := s.parameters(ctx, input, format, req.Options)
 		if err != nil {
@@ -183,7 +195,7 @@ func (s *Service) resolveInput(ctx context.Context, bookID, inputFileID string) 
 		return library.File{}, err
 	}
 	if !ok {
-		return library.File{}, fmt.Errorf("book %q not found", bookID)
+		return library.File{}, userErrorf("book %q not found", bookID)
 	}
 	if strings.TrimSpace(inputFileID) == "" {
 		return book.Original, nil
@@ -193,7 +205,7 @@ func (s *Service) resolveInput(ctx context.Context, bookID, inputFileID string) 
 		return library.File{}, err
 	}
 	if !ok || input.BookID != book.ID || (input.Role != "original" && input.Role != "revision") {
-		return library.File{}, fmt.Errorf("generation input file not found")
+		return library.File{}, userErrorf("generation input file not found")
 	}
 	return input, nil
 }

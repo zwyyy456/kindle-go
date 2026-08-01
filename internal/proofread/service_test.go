@@ -3,6 +3,7 @@ package proofread
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,21 @@ func TestModifyRejectsInvalidOrImageReplacement(t *testing.T) {
 	}
 	if _, err := service.Decide(context.Background(), "image", DecisionRequest{Decision: "modify", Replacement: "x"}); err == nil {
 		t.Fatal("image text replacement unexpectedly accepted")
+	}
+}
+
+func TestDecideReturnsStoreErrorInsteadOfUserError(t *testing.T) {
+	service, _, _ := newReviewService(t, []store.ProofreadCandidateRecord{
+		reviewRecord("candidate", 0, 2, "review", "review", "错", "正"),
+	})
+	if err := service.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.Decide(context.Background(), "candidate", DecisionRequest{Decision: "reject"})
+	var userErr *UserError
+	if err == nil || errors.As(err, &userErr) || !strings.Contains(err.Error(), "database is closed") {
+		t.Fatalf("Decide store error = %v", err)
 	}
 }
 

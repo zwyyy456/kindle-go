@@ -45,6 +45,14 @@ type Service struct {
 	now     func() time.Time
 }
 
+type ValidationError struct {
+	err error
+}
+
+func (e *ValidationError) Error() string { return e.err.Error() }
+
+func (e *ValidationError) Unwrap() error { return e.err }
+
 func New(source *store.Store, base txtconfig.Config, runtime Runtime) *Service {
 	txtconfig.Normalize(&base)
 	return &Service{
@@ -131,45 +139,49 @@ func normalize(values *Values) {
 
 func Validate(values Values) error {
 	if values.Language == "" {
-		return fmt.Errorf("language is required")
+		return validationErrorf("language is required")
 	}
 	for name, pattern := range map[string]string{"H1 regex": values.TXT.H1Regex, "H2 regex": values.TXT.H2Regex} {
 		if pattern == "" {
-			return fmt.Errorf("%s is required", name)
+			return validationErrorf("%s is required", name)
 		}
 		if _, err := regexp.Compile(pattern); err != nil {
-			return fmt.Errorf("%s is invalid: %w", name, err)
+			return validationErrorf("%s is invalid: %w", name, err)
 		}
 	}
 	for index, pattern := range values.TXT.DropRegex {
 		if _, err := regexp.Compile(pattern); err != nil {
-			return fmt.Errorf("drop regex %d is invalid: %w", index+1, err)
+			return validationErrorf("drop regex %d is invalid: %w", index+1, err)
 		}
 	}
 	for index, rule := range values.TXT.Replace {
 		if _, err := regexp.Compile(rule.Pattern); err != nil {
-			return fmt.Errorf("replacement regex %d is invalid: %w", index+1, err)
+			return validationErrorf("replacement regex %d is invalid: %w", index+1, err)
 		}
 	}
 	if values.TXT.SplitLevel < 1 || values.TXT.SplitLevel > 2 {
-		return fmt.Errorf("split level must be 1 or 2")
+		return validationErrorf("split level must be 1 or 2")
 	}
 	if values.Style.LineHeight < 0.5 || values.Style.LineHeight > 4 {
-		return fmt.Errorf("line height must be between 0.5 and 4")
+		return validationErrorf("line height must be between 0.5 and 4")
 	}
 	if values.Style.ParagraphIndent == "" || values.Style.ParagraphSpacing == "" {
-		return fmt.Errorf("paragraph indent and spacing are required")
+		return validationErrorf("paragraph indent and spacing are required")
 	}
 	switch values.Style.TextAlign {
 	case "left", "right", "center", "justify":
 	default:
-		return fmt.Errorf("text align must be left, right, center, or justify")
+		return validationErrorf("text align must be left, right, center, or justify")
 	}
 	if values.Proofread.BatchSize < 1000 || values.Proofread.BatchSize > 50000 {
-		return fmt.Errorf("proofread batch size must be between 1000 and 50000 characters")
+		return validationErrorf("proofread batch size must be between 1000 and 50000 characters")
 	}
 	if values.Proofread.Concurrency < 1 || values.Proofread.Concurrency > 8 {
-		return fmt.Errorf("proofread concurrency must be between 1 and 8")
+		return validationErrorf("proofread concurrency must be between 1 and 8")
 	}
 	return nil
+}
+
+func validationErrorf(format string, args ...any) error {
+	return &ValidationError{err: fmt.Errorf(format, args...)}
 }

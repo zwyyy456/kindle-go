@@ -73,6 +73,61 @@ func TestWebInternalErrorHidesDetailsAndLogsThem(t *testing.T) {
 	}
 }
 
+func TestWebActionInternalErrorHidesDetailsAndLogsThem(t *testing.T) {
+	handler, _, _, storage := newHTTPTestHandler(t)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"confirm": {"delete"}}
+	request := httptest.NewRequest(http.MethodPost, "/books/book-1/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	location := response.Header().Get("Location")
+	if response.Code != http.StatusSeeOther || strings.Contains(location, "database+is+closed") || !strings.Contains(location, "Book+deletion+failed") {
+		t.Fatalf("action error response = %d, %q", response.Code, location)
+	}
+	if !strings.Contains(logs.String(), "path=/books/book-1/delete") || !strings.Contains(logs.String(), "database is closed") {
+		t.Fatalf("action error log = %q", logs.String())
+	}
+}
+
+func TestCandidateDecisionInternalErrorReturns500AndLogsThem(t *testing.T) {
+	handler, _, _, storage := newHTTPTestHandler(t)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"decision": {"reject"}}
+	request := httptest.NewRequest(http.MethodPost, "/candidates/candidate-1/decision", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Internal server error") || strings.Contains(response.Body.String(), "database is closed") {
+		t.Fatalf("candidate action error response = %d, %q", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logs.String(), "path=/candidates/candidate-1/decision") || !strings.Contains(logs.String(), "database is closed") {
+		t.Fatalf("candidate action error log = %q", logs.String())
+	}
+}
+
+func TestCandidateDecisionNotFoundReturns404(t *testing.T) {
+	handler, _, _, _ := newHTTPTestHandler(t)
+	form := url.Values{"decision": {"reject"}}
+	request := httptest.NewRequest(http.MethodPost, "/candidates/missing/decision", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("candidate not found response = %d, %q", response.Code, response.Body.String())
+	}
+}
+
 func TestImportAndDownloadLogsContainOnlyFileMetadata(t *testing.T) {
 	handler, service, _, _ := newHTTPTestHandler(t)
 	var output bytes.Buffer

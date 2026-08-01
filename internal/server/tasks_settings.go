@@ -21,11 +21,12 @@ func (h Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		values, err := settingsFromForm(r)
-		if err == nil {
-			err = h.settings.Save(r.Context(), values)
-		}
 		if err != nil {
 			http.Redirect(w, r, "/settings?message="+urlMessage(err.Error()), http.StatusSeeOther)
+			return
+		}
+		if err := h.settings.Save(r.Context(), values); err != nil {
+			h.redirectActionError(w, r, "/settings", err, "Settings could not be saved. Check the values and try again.")
 			return
 		}
 		http.Redirect(w, r, "/settings?message=saved", http.StatusSeeOther)
@@ -73,7 +74,7 @@ func (h Handler) handleCheckCodex(w http.ResponseWriter, r *http.Request) {
 	status, err := check(r.Context())
 	message := "Codex check passed: " + status
 	if err != nil {
-		message = "Codex check failed: " + err.Error()
+		message = h.actionErrorMessage(r, err, "Codex check failed. See Settings diagnostics.")
 	}
 	http.Redirect(w, r, "/settings?message="+urlMessage(message), http.StatusSeeOther)
 }
@@ -177,7 +178,11 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	original, ok, err := h.tasks.Get(r.Context(), id)
-	if err != nil || !ok {
+	if err != nil {
+		h.writeInternalError(w, r, err)
+		return
+	}
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -189,7 +194,7 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		message = "task retry queued"
 	}
 	if err != nil {
-		message = err.Error()
+		message = h.actionErrorMessage(r, err, "Task action failed. Refresh the page and try again.")
 	}
 	http.Redirect(w, r, "/books/"+original.BookID+"?message="+urlMessage(message), http.StatusSeeOther)
 }

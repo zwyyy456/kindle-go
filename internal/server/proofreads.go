@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -23,15 +24,33 @@ func (h Handler) handleCandidateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, err := h.proofreads.Decide(r.Context(), id, proofread.DecisionRequest{Decision: r.Form.Get("decision"), Replacement: r.Form.Get("replacement")})
+	if err != nil {
+		if isCandidateNotFound(err) {
+			http.NotFound(w, r)
+			return
+		}
+		if run.ID == "" {
+			h.writeInternalError(w, r, err)
+			return
+		}
+		message, ok := safeActionMessage(err)
+		if !ok {
+			h.writeInternalError(w, r, err)
+			return
+		}
+		http.Redirect(w, r, "/books/"+run.BookID+"/proofreads/"+run.ID+"?message="+urlMessage(message), http.StatusSeeOther)
+		return
+	}
 	if run.ID == "" {
 		http.NotFound(w, r)
 		return
 	}
-	message := "candidate decision saved"
-	if err != nil {
-		message = "decision failed: " + err.Error()
-	}
-	http.Redirect(w, r, "/books/"+run.BookID+"/proofreads/"+run.ID+"?message="+urlMessage(message), http.StatusSeeOther)
+	http.Redirect(w, r, "/books/"+run.BookID+"/proofreads/"+run.ID+"?message="+urlMessage("candidate decision saved"), http.StatusSeeOther)
+}
+
+func isCandidateNotFound(err error) bool {
+	var userErr *proofread.UserError
+	return errors.As(err, &userErr) && userErr.Error() == "candidate not found"
 }
 
 func (h Handler) handleProofreadRoute(w http.ResponseWriter, r *http.Request) {
@@ -53,10 +72,10 @@ func (h Handler) handleProofreadRoute(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		run, ok, runErr := h.proofreads.Run(r.Context(), runID)
 		if runErr == nil && ok {
-			http.Redirect(w, r, "/books/"+run.BookID+"/proofreads/"+runID+"?message="+urlMessage("revision failed: "+err.Error()), http.StatusSeeOther)
+			h.redirectActionError(w, r, "/books/"+run.BookID+"/proofreads/"+runID, err, "Revision task could not be queued. Resolve the review items and try again.")
 			return
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.writeActionError(w, r, err, http.StatusBadRequest, "Revision task could not be queued. Refresh the review and try again.")
 		return
 	}
 	http.Redirect(w, r, "/books/"+created.BookID+"?message=revision+task+queued", http.StatusSeeOther)
@@ -84,7 +103,7 @@ func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request, b
 
 func (h Handler) handleCreateProofread(w http.ResponseWriter, r *http.Request, bookID string) {
 	if _, err := h.proofreads.Create(r.Context(), bookID); err != nil {
-		http.Redirect(w, r, "/books/"+bookID+"?message="+urlMessage("proofread failed: "+err.Error()), http.StatusSeeOther)
+		h.redirectActionError(w, r, "/books/"+bookID, err, "Proofreading task could not be queued. Check the book and try again.")
 		return
 	}
 	http.Redirect(w, r, "/books/"+bookID+"?message=proofread+task+queued", http.StatusSeeOther)

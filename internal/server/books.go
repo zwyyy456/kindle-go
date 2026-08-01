@@ -149,7 +149,7 @@ func (h Handler) handleImportConfirm(w http.ResponseWriter, r *http.Request, tok
 	}
 	book, err := h.library.ConfirmImport(r.Context(), token, r.Form.Get("action"))
 	if err != nil {
-		http.Redirect(w, r, "/books?message="+urlMessage(err.Error()), http.StatusSeeOther)
+		h.redirectActionError(w, r, "/books", err, "Import confirmation failed. Import the file again.")
 		return
 	}
 	if book.ID == "" {
@@ -261,7 +261,7 @@ func (h Handler) handleGenerate(w http.ResponseWriter, r *http.Request, bookID s
 		Options: options,
 	})
 	if err != nil {
-		http.Redirect(w, r, "/books/"+bookID+"?message="+urlMessage("generate failed: "+err.Error()), http.StatusSeeOther)
+		h.redirectActionError(w, r, "/books/"+bookID, err, "Generation task could not be queued. Check the selected input and try again.")
 		return
 	}
 	http.Redirect(w, r, "/books/"+bookID+"?message=task+queued", http.StatusSeeOther)
@@ -281,7 +281,7 @@ func (h Handler) handleTXTPreview(w http.ResponseWriter, r *http.Request, bookID
 		BookID: bookID, InputFileID: r.Form.Get("input_file_id"), Options: options,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.writeActionError(w, r, err, http.StatusBadRequest, "TXT preview could not be generated. Check the selected input and parameters.")
 		return
 	}
 	data := txtPreviewPageData{
@@ -343,7 +343,7 @@ func (h Handler) handleDeleteBook(w http.ResponseWriter, r *http.Request, bookID
 		return
 	}
 	if err := h.library.DeleteBook(r.Context(), bookID); err != nil {
-		http.Redirect(w, r, "/books/"+bookID+"?message="+urlMessage(err.Error()), http.StatusSeeOther)
+		h.redirectActionError(w, r, "/books/"+bookID, err, "Book deletion failed. Refresh the page and try again.")
 		return
 	}
 	http.Redirect(w, r, "/books?message=book+deleted", http.StatusSeeOther)
@@ -363,7 +363,7 @@ func (h Handler) handleFileRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.library.DeleteFile(r.Context(), fileID); err != nil {
-			http.Redirect(w, r, "/books/"+file.BookID+"?message="+urlMessage(err.Error()), http.StatusSeeOther)
+			h.redirectActionError(w, r, "/books/"+file.BookID, err, "File deletion failed. Refresh the page and try again.")
 			return
 		}
 		http.Redirect(w, r, "/books/"+file.BookID+"?message=file+deleted", http.StatusSeeOther)

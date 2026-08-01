@@ -28,6 +28,18 @@ type Parameters struct {
 	EngineVersion  string `json:"engine_version"`
 }
 
+type UserError struct {
+	err error
+}
+
+func (e *UserError) Error() string { return e.err.Error() }
+
+func (e *UserError) Unwrap() error { return e.err }
+
+func userErrorf(format string, args ...any) error {
+	return &UserError{err: fmt.Errorf(format, args...)}
+}
+
 type Service struct {
 	store    *store.Store
 	library  *library.Service
@@ -47,7 +59,7 @@ func (s *Service) Create(ctx context.Context, bookID string) (task.Task, error) 
 		return task.Task{}, err
 	}
 	if !ok || (book.SourceFormat != "txt" && book.SourceFormat != "epub") {
-		return task.Task{}, fmt.Errorf("proofreading is only available for TXT and EPUB books")
+		return task.Task{}, userErrorf("proofreading is only available for TXT and EPUB books")
 	}
 	existingTasks, err := s.tasks.List(ctx, bookID)
 	if err != nil {
@@ -55,7 +67,7 @@ func (s *Service) Create(ctx context.Context, bookID string) (task.Task, error) 
 	}
 	for _, existing := range existingTasks {
 		if existing.Type == task.Proofread && (existing.Status == task.Queued || existing.Status == task.Running) {
-			return task.Task{}, fmt.Errorf("book already has an active proofreading task")
+			return task.Task{}, userErrorf("book already has an active proofreading task")
 		}
 	}
 	values, err := s.settings.Current(ctx)
@@ -165,7 +177,7 @@ func (s *Service) CreateRevision(ctx context.Context, runID string, confirmUnres
 		return task.Task{}, err
 	}
 	if !ok || run.Status != "completed" {
-		return task.Task{}, fmt.Errorf("completed proofread run not found")
+		return task.Task{}, userErrorf("completed proofread run not found")
 	}
 	views, err := s.candidateViews(ctx, run)
 	if err != nil {
@@ -200,7 +212,7 @@ func (s *Service) CreateRevision(ctx context.Context, runID string, confirmUnres
 		})
 	}
 	if parameters.HasUnresolved && !confirmUnresolved {
-		return task.Task{}, fmt.Errorf("unresolved candidates require explicit confirmation; their source text will be kept")
+		return task.Task{}, userErrorf("unresolved candidates require explicit confirmation; their source text will be kept")
 	}
 	encoded, err := json.Marshal(parameters)
 	if err != nil {
@@ -223,11 +235,14 @@ func (s *Service) Decide(ctx context.Context, candidateID string, request Decisi
 		return Run{}, err
 	}
 	if !ok {
-		return Run{}, fmt.Errorf("candidate not found")
+		return Run{}, userErrorf("candidate not found")
 	}
 	run, ok, err := s.store.ProofreadRun(ctx, candidate.RunID)
-	if err != nil || !ok {
-		return Run{}, fmt.Errorf("proofread run not found")
+	if err != nil {
+		return Run{}, err
+	}
+	if !ok {
+		return Run{}, userErrorf("proofread run not found")
 	}
 	result := runFromStore(run)
 	request.Decision = strings.TrimSpace(request.Decision)
@@ -239,16 +254,16 @@ func (s *Service) Decide(ctx context.Context, candidateID string, request Decisi
 		request.Replacement = ""
 	case "modify":
 		if candidate.Kind != "text" {
-			return result, fmt.Errorf("image candidates cannot use a text replacement")
+			return result, userErrorf("image candidates cannot use a text replacement")
 		}
 		if request.Replacement == "" {
-			return result, fmt.Errorf("modified replacement must not be empty")
+			return result, userErrorf("modified replacement must not be empty")
 		}
 		if strings.ContainsAny(request.Replacement, "\r\n") {
-			return result, fmt.Errorf("modified replacement must stay on one line")
+			return result, userErrorf("modified replacement must stay on one line")
 		}
 	default:
-		return result, fmt.Errorf("decision must be accept, reject, or modify")
+		return result, userErrorf("decision must be accept, reject, or modify")
 	}
 	if request.Decision != "reject" {
 		views, err := s.candidateViews(ctx, run)
@@ -268,7 +283,7 @@ func (s *Service) Decide(ctx context.Context, candidateID string, request Decisi
 		markConflicts(views)
 		for _, view := range views {
 			if view.Candidate.ID == candidateID && len(view.ConflictIDs) != 0 {
-				return result, fmt.Errorf("candidate_conflict: candidate overlaps another applied candidate; reject the conflicting candidate first")
+				return result, userErrorf("candidate_conflict: candidate overlaps another applied candidate; reject the conflicting candidate first")
 			}
 		}
 	}
