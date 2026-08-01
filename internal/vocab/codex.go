@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -48,6 +48,9 @@ func SelectAndBuildCards(cfg Config, records []KindleRecord, lookups map[string]
 	for _, batch := range chunkAIItems(items, cfg.AI.BatchSize) {
 		selectionBatch, err := RunCodexExec(cfg, batch)
 		if err != nil {
+			return nil, nil, 0, 0, err
+		}
+		if err := validateSelectionBatch(batch, selectionBatch); err != nil {
 			return nil, nil, 0, 0, err
 		}
 		for _, selection := range selectionBatch.Results {
@@ -152,25 +155,46 @@ Input:
 }
 
 func ParseAISelection(data []byte) (AISelectionBatch, error) {
-	text := strings.TrimSpace(string(data))
 	var batch AISelectionBatch
-	if err := json.Unmarshal([]byte(text), &batch); err == nil {
-		return batch, nil
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&batch); err != nil {
+		return AISelectionBatch{}, fmt.Errorf("codex output did not contain valid selection JSON: %w", err)
 	}
-	re := regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)\\s*```")
-	if match := re.FindStringSubmatch(text); len(match) == 2 {
-		if err := json.Unmarshal([]byte(match[1]), &batch); err == nil {
-			return batch, nil
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return AISelectionBatch{}, errors.New("codex output contains multiple JSON values")
+		}
+		return AISelectionBatch{}, fmt.Errorf("codex output contains trailing data: %w", err)
+	}
+	return batch, nil
+}
+
+func validateSelectionBatch(items []AIItem, batch AISelectionBatch) error {
+	expected := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if _, exists := expected[item.RequestID]; exists {
+			return fmt.Errorf("AI input contains duplicate requestID %q", item.RequestID)
+		}
+		expected[item.RequestID] = struct{}{}
+	}
+
+	seen := make(map[string]struct{}, len(batch.Results))
+	for _, result := range batch.Results {
+		if _, exists := expected[result.RequestID]; !exists {
+			return fmt.Errorf("AI output contains unknown requestID %q", result.RequestID)
+		}
+		if _, exists := seen[result.RequestID]; exists {
+			return fmt.Errorf("AI output contains duplicate requestID %q", result.RequestID)
+		}
+		seen[result.RequestID] = struct{}{}
+	}
+	for requestID := range expected {
+		if _, exists := seen[requestID]; !exists {
+			return fmt.Errorf("AI output is missing requestID %q", requestID)
 		}
 	}
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(text[start:end+1]), &batch); err == nil {
-			return batch, nil
-		}
-	}
-	return AISelectionBatch{}, errors.New("codex output did not contain valid selection JSON")
+	return nil
 }
 
 func findCandidate(candidates []FlashDictSenseCandidate, id string) (FlashDictSenseCandidate, bool) {
@@ -203,6 +227,7 @@ const aiOutputSchema = `{
   "properties": {
     "results": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,

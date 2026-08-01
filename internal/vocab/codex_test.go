@@ -5,20 +5,11 @@ import (
 	"testing"
 )
 
-func TestParseAISelectionAcceptsFencedJSON(t *testing.T) {
+func TestParseAISelectionRejectsFencedJSON(t *testing.T) {
 	data := []byte("```json\n{\"results\":[{\"requestID\":\"kindle-1\",\"selectedCandidateID\":\"c1\",\"confidence\":0.91,\"reason\":\"matches context\"}]}\n```")
 
-	batch, err := ParseAISelection(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(batch.Results) != 1 {
-		t.Fatalf("len(results) = %d", len(batch.Results))
-	}
-	result := batch.Results[0]
-	if result.RequestID != "kindle-1" || result.SelectedCandidateID != "c1" || result.Confidence != 0.91 {
-		t.Fatalf("unexpected result: %+v", result)
+	if _, err := ParseAISelection(data); err == nil {
+		t.Fatal("ParseAISelection accepted fenced JSON")
 	}
 }
 
@@ -46,5 +37,25 @@ func TestBuildAIPromptIncludesItems(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestValidateSelectionBatchRequiresExactRequestIDs(t *testing.T) {
+	items := []AIItem{{RequestID: "kindle-1"}, {RequestID: "kindle-2"}}
+	tests := []struct {
+		name    string
+		results []AISelection
+		want    string
+	}{
+		{name: "missing", results: []AISelection{{RequestID: "kindle-1"}}, want: "missing requestID"},
+		{name: "duplicate", results: []AISelection{{RequestID: "kindle-1"}, {RequestID: "kindle-1"}}, want: "duplicate requestID"},
+		{name: "unknown", results: []AISelection{{RequestID: "kindle-1"}, {RequestID: "kindle-3"}}, want: "unknown requestID"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateSelectionBatch(items, AISelectionBatch{Results: test.results}); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateSelectionBatch error = %v", err)
+			}
+		})
 	}
 }
