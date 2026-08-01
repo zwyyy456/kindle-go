@@ -184,6 +184,34 @@ func TestGenerationFailsWhenImmutableSourceHashChanges(t *testing.T) {
 	<-done
 }
 
+func TestGenerationMarksMissingInputAsUnavailable(t *testing.T) {
+	_, libraryService, taskService, settingsService, book := newGenerationTest(t)
+	service := NewService(libraryService, taskService, settingsService)
+	tasks, err := service.Create(context.Background(), CreateRequest{BookID: book.ID, Formats: []string{"epub"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := libraryService.ResolveOriginal(context.Background(), book.ID, book.Original.ID, book.Original.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- task.NewRunner(taskService, map[task.Type]task.Executor{task.GenerateEPUB: NewExecutor(libraryService)}).Run(ctx)
+	}()
+	failed := waitGenerationStatus(t, taskService, tasks[0].ID, task.Failed)
+	if failed.ErrorCode != "source_unavailable" {
+		t.Fatalf("failed task = %#v", failed)
+	}
+	cancel()
+	<-done
+}
+
 func TestGenerationCanUseReadyRevisionAsImmutableInput(t *testing.T) {
 	storage, libraryService, taskService, settingsService, book := newGenerationTest(t)
 	revisionTask, err := taskService.Create(context.Background(), task.CreateRequest{BookID: book.ID, Type: task.BuildRevisionTXT, InputFileID: book.Original.ID})

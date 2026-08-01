@@ -164,6 +164,34 @@ func TestProofreadFailureDoesNotExposeRunOrCandidates(t *testing.T) {
 	}
 }
 
+func TestProofreadMarksMissingSourceAsUnavailable(t *testing.T) {
+	storage, libraryService, settingsService, taskService := newProofreadTest(t)
+	imported, err := libraryService.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := NewService(storage, libraryService, taskService, settingsService).Create(context.Background(), imported.Book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath, _, err := libraryService.ResolveOriginal(context.Background(), imported.Book.ID, imported.Book.Original.ID, imported.Book.Original.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+
+	runProofreadTask(t, taskService, NewExecutor(storage, libraryService, nil, &fakeProofreadModel{}), created.ID, task.Failed)
+	failed, _, err := taskService.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.ErrorCode != "source_unavailable" {
+		t.Fatalf("failed task = %#v", failed)
+	}
+}
+
 func TestCancelProofreadStopsModelAndDoesNotExposeRun(t *testing.T) {
 	storage, libraryService, settingsService, taskService := newProofreadTest(t)
 	imported, err := libraryService.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文\n")})

@@ -20,7 +20,7 @@ func (s *Service) ResolveOriginal(ctx context.Context, bookID, fileID, expectedS
 		return "", File{}, err
 	}
 	if !ok || book.Original.ID != fileID {
-		return "", File{}, os.ErrNotExist
+		return "", File{}, wrapSourceUnavailable(os.ErrNotExist)
 	}
 	path, err := s.store.ResolveRel(book.Original.RelPath)
 	if err != nil {
@@ -28,20 +28,20 @@ func (s *Service) ResolveOriginal(ctx context.Context, bookID, fileID, expectedS
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return "", File{}, err
+		return "", File{}, wrapSourceUnavailable(err)
 	}
 	hash := sha256.New()
 	size, copyErr := io.Copy(hash, file)
 	closeErr := file.Close()
 	if copyErr != nil {
-		return "", File{}, copyErr
+		return "", File{}, wrapSourceUnavailable(copyErr)
 	}
 	if closeErr != nil {
-		return "", File{}, closeErr
+		return "", File{}, wrapSourceUnavailable(closeErr)
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
 	if size != book.Original.Size || digest != book.Original.SHA256 || (expectedSHA != "" && digest != expectedSHA) {
-		return "", File{}, fmt.Errorf("source_hash_mismatch: original file changed after import")
+		return "", File{}, fmt.Errorf("%w: original file changed after import", ErrSourceChanged)
 	}
 	return path, fileFromStore(book.Original), nil
 }
@@ -52,7 +52,7 @@ func (s *Service) ResolveInput(ctx context.Context, bookID, fileID, expectedSHA 
 		return "", File{}, err
 	}
 	if !ok || stored.BookID != bookID || (stored.Role != "original" && stored.Role != "revision") {
-		return "", File{}, os.ErrNotExist
+		return "", File{}, wrapSourceUnavailable(os.ErrNotExist)
 	}
 	path, err := s.store.ResolveRel(stored.RelPath)
 	if err != nil {
@@ -60,10 +60,10 @@ func (s *Service) ResolveInput(ctx context.Context, bookID, fileID, expectedSHA 
 	}
 	digest, size, err := hashLibraryFile(path)
 	if err != nil {
-		return "", File{}, err
+		return "", File{}, wrapSourceUnavailable(err)
 	}
 	if digest != stored.SHA256 || size != stored.Size || (expectedSHA != "" && digest != expectedSHA) {
-		return "", File{}, fmt.Errorf("source_hash_mismatch: input file changed after commit")
+		return "", File{}, fmt.Errorf("%w: input file changed after commit", ErrSourceChanged)
 	}
 	return path, fileFromStore(stored), nil
 }

@@ -111,7 +111,7 @@ func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.P
 	}
 	sourcePath, source, err := e.library.ResolveOriginal(ctx, value.BookID, value.InputFileID, params.ExpectedSHA256)
 	if err != nil {
-		return &task.ExecutionError{Code: "source_hash_mismatch", Err: err}
+		return sourceResolutionError(err)
 	}
 	workRel := filepath.ToSlash(filepath.Join("work", value.ID))
 	workDir, err := e.store.ResolveRel(workRel)

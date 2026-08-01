@@ -52,7 +52,7 @@ func (e *RevisionExecutor) Execute(ctx context.Context, value task.Task, progres
 	}
 	_, source, err := e.library.ResolveOriginal(ctx, value.BookID, value.InputFileID, params.SourceSHA256)
 	if err != nil {
-		return &task.ExecutionError{Code: "source_hash_mismatch", Err: err}
+		return sourceResolutionError(err)
 	}
 	candidates, err := e.store.ProofreadCandidates(ctx, run.ID)
 	if err != nil {
@@ -122,7 +122,7 @@ func (e *RevisionExecutor) Execute(ctx context.Context, value task.Task, progres
 		compatibility = &record
 	}
 	if _, _, err := e.library.ResolveOriginal(ctx, value.BookID, value.InputFileID, params.SourceSHA256); err != nil {
-		return &task.ExecutionError{Code: "source_hash_mismatch", Err: err}
+		return sourceResolutionError(err)
 	}
 	base := strings.TrimSuffix(source.DisplayName, filepath.Ext(source.DisplayName))
 	if strings.TrimSpace(base) == "" {

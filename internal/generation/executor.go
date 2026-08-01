@@ -30,7 +30,10 @@ func (e *Executor) Execute(ctx context.Context, value task.Task, progress task.P
 	}
 	inputPath, input, err := e.library.ResolveInput(ctx, value.BookID, value.InputFileID, params.ExpectedSHA256)
 	if err != nil {
-		return &task.ExecutionError{Code: errorCode(err, "source_unavailable"), Err: err}
+		if code := library.SourceErrorCode(err); code != "" {
+			return &task.ExecutionError{Code: code, Err: err}
+		}
+		return err
 	}
 	outputPath, workRelPath, err := e.library.WorkOutputPath(value.ID, params.OutputFormat)
 	if err != nil {
@@ -96,11 +99,4 @@ func safeName(name string) string {
 		}
 	}
 	return result.String()
-}
-
-func errorCode(err error, fallback string) string {
-	if strings.Contains(err.Error(), "source_hash_mismatch") {
-		return "source_hash_mismatch"
-	}
-	return fallback
 }

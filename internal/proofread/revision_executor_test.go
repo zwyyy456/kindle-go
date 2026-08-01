@@ -145,6 +145,44 @@ func TestRevisionFailsIfImmutableSourceHashChanges(t *testing.T) {
 	}
 }
 
+func TestRevisionMarksMissingSourceAsUnavailable(t *testing.T) {
+	storage, libraryService, settingsService, taskService := newProofreadTest(t)
+	imported, err := libraryService.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("第一章\n正文\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(storage, libraryService, taskService, settingsService)
+	proofreadTask, err := service.Create(context.Background(), imported.Book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runProofreadTask(t, taskService, NewExecutor(storage, libraryService, nil, &fakeProofreadModel{}), proofreadTask.ID, task.Completed)
+	runs, err := service.Runs(context.Background(), imported.Book.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %#v, %v", runs, err)
+	}
+	revisionTask, err := service.CreateRevision(context.Background(), runs[0].ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath, _, err := libraryService.ResolveOriginal(context.Background(), imported.Book.ID, imported.Book.Original.ID, imported.Book.Original.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+
+	runRevisionTask(t, taskService, NewRevisionExecutor(storage, libraryService, nil), revisionTask.ID, task.Failed)
+	failed, _, err := taskService.Get(context.Background(), revisionTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.ErrorCode != "source_unavailable" {
+		t.Fatalf("failed revision = %#v", failed)
+	}
+}
+
 func TestRevisionExecutorPreservesMinimalEPUBAndStoresCompatibility(t *testing.T) {
 	storage, libraryService, settingsService, taskService := newProofreadTest(t)
 	source := minimalProofreadEPUB(t)
