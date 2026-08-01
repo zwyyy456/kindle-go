@@ -98,7 +98,7 @@ func TestOpenReconcilesPendingFiles(t *testing.T) {
 	}
 }
 
-func TestOpenCompletesArtifactCommitInterruptedAfterRename(t *testing.T) {
+func TestStartupFailsArtifactCommitInterruptedAfterRename(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)
 	if err != nil {
@@ -133,24 +133,31 @@ func TestOpenCompletesArtifactCommitInterruptedAfterRename(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(root)
+	reopened, err := OpenForWorker(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("completed artifact missing after restart: %v", err)
+	if err := reopened.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recoveryTime := time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)
+	if _, err := reopened.RecoverRunningTasks(context.Background(), recoveryTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("interrupted artifact remains after restart: %v", err)
 	}
 	file, ok, err := reopened.File(context.Background(), "pending-artifact")
-	if err != nil || !ok || file.State != "ready" {
-		t.Fatalf("recovered artifact = %#v, %v, %v", file, ok, err)
+	if err != nil || ok {
+		t.Fatalf("interrupted artifact remains visible = %#v, %v, %v", file, ok, err)
 	}
 	recoveredTask, ok, err := reopened.Task(context.Background(), task.ID)
-	if err != nil || !ok || recoveredTask.Status != "completed" {
+	if err != nil || !ok || recoveredTask.Status != "failed" || recoveredTask.ErrorCode != "task_process_interrupted" {
 		t.Fatalf("recovered task = %#v, %v, %v", recoveredTask, ok, err)
 	}
 	events, err := reopened.TaskEvents(context.Background(), task.ID)
-	if err != nil || len(events) < 3 || !strings.Contains(events[len(events)-1].Message, "startup recovery") {
+	if err != nil || len(events) < 3 || events[len(events)-1].Stage != "failed" || !strings.Contains(events[len(events)-1].Message, "task_process_interrupted") {
 		t.Fatalf("recovery events = %#v, %v", events, err)
 	}
 }
@@ -214,7 +221,7 @@ func TestStartupRollsBackArtifactCommitInterruptedBeforeRename(t *testing.T) {
 	}
 }
 
-func TestOpenAtomicallyCompletesRenamedRevisionDeliverableGroup(t *testing.T) {
+func TestStartupFailsRenamedRevisionDeliverableGroup(t *testing.T) {
 	root := t.TempDir()
 	storage, err := Open(root)
 	if err != nil {
@@ -261,17 +268,23 @@ func TestOpenAtomicallyCompletesRenamedRevisionDeliverableGroup(t *testing.T) {
 	if err := storage.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(root)
+	reopened, err := OpenForWorker(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+	if err := reopened.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.RecoverRunningTasks(context.Background(), time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
 	files, err := reopened.FilesForBook(context.Background(), book.ID)
-	if err != nil || len(files) != 4 {
-		t.Fatalf("recovered revision files = %#v, %v", files, err)
+	if err != nil || len(files) != 1 || files[0].Role != "original" {
+		t.Fatalf("interrupted revision files = %#v, %v", files, err)
 	}
 	recoveredTask, ok, err := reopened.Task(context.Background(), taskRecord.ID)
-	if err != nil || !ok || recoveredTask.Status != "completed" {
+	if err != nil || !ok || recoveredTask.Status != "failed" || recoveredTask.ErrorCode != "task_process_interrupted" {
 		t.Fatalf("recovered revision task = %#v, %v, %v", recoveredTask, ok, err)
 	}
 }

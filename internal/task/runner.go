@@ -85,11 +85,11 @@ func (r *Runner) Prepare(ctx context.Context) error {
 	if err := r.service.store.ClaimRuntimeLock(ctx, instanceID, os.Getpid(), r.service.now(), r.staleAfter); err != nil {
 		return err
 	}
-	if err := r.service.store.Initialize(ctx); err != nil {
+	if _, err := r.service.store.RecoverRunningTasks(ctx, r.service.now()); err != nil {
 		_ = r.service.store.ReleaseRuntimeLock(context.Background(), instanceID)
 		return err
 	}
-	if _, err := r.service.store.RecoverRunningTasks(ctx, r.service.now()); err != nil {
+	if err := r.service.store.Initialize(ctx); err != nil {
 		_ = r.service.store.ReleaseRuntimeLock(context.Background(), instanceID)
 		return err
 	}

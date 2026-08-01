@@ -467,25 +467,11 @@ func (s *Store) finalizePendingTaskFiles(ctx context.Context, taskID string) (bo
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id = ?`, taskID).Scan(&status); err != nil {
 		return false, err
 	}
-	if status != "running" && status != "completed" {
+	// A task that was running when the process stopped must be failed by
+	// RecoverRunningTasks. Never turn its renamed-but-uncommitted files into a
+	// successful result during startup reconciliation.
+	if status != "completed" {
 		return false, nil
-	}
-	if status == "running" {
-		now := time.Now()
-		result, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'completed', error_code = '', error_message = '', finished_at = ?, stage = 'completed' WHERE id = ? AND status = 'running'`, formatTime(now), taskID)
-		if err != nil {
-			return false, err
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			return false, err
-		}
-		if rows != 1 {
-			return false, fmt.Errorf("task %q changed during startup recovery", taskID)
-		}
-		if err := appendTaskEvent(ctx, tx, taskID, "info", "completed", "Task completed during startup recovery", now); err != nil {
-			return false, err
-		}
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE files SET state = 'ready' WHERE task_id = ? AND state = 'pending'`, taskID)
 	if err != nil {
