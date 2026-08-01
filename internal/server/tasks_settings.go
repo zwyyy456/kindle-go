@@ -37,7 +37,7 @@ func (h Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := h.settings.Current(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	diagnostics := proofread.DiagnoseDependencies(r.Context(), nil, "", "")
@@ -50,14 +50,14 @@ func (h Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	data.System, err = h.library.Diagnostics(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	data.SystemFree = humanSize(int64(data.System.FreeBytes))
 	replacements, _ := json.Marshal(values.TXT.Replace)
 	data.ReplaceJSON = string(replacements)
 	if err := settingsTemplate.Execute(w, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 	}
 }
 
@@ -128,11 +128,11 @@ func (h Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := h.tasks.List(r.Context(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	if err := tasksTemplate.Execute(w, tasksPageData{Tasks: taskViews(values), Message: r.URL.Query().Get("message")}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 	}
 }
 
@@ -145,7 +145,7 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && rest != "" && !strings.Contains(rest, "/") {
 		value, ok, err := h.tasks.Get(r.Context(), rest)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			h.writeInternalError(w, r, err)
 			return
 		}
 		if !ok {
@@ -154,11 +154,11 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		events, err := h.tasks.Events(r.Context(), rest)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			h.writeInternalError(w, r, err)
 			return
 		}
 		if err := taskDetailTemplate.Execute(w, taskDetailPageData{Task: taskViews([]task.Task{value})[0], Events: taskEventViews(events)}); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			h.writeInternalError(w, r, err)
 		}
 		return
 	}
@@ -197,7 +197,7 @@ func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 func (h Handler) writeTaskStatus(w http.ResponseWriter, r *http.Request, id string) {
 	value, ok, err := h.tasks.Get(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	if !ok {
@@ -206,7 +206,7 @@ func (h Handler) writeTaskStatus(w http.ResponseWriter, r *http.Request, id stri
 	}
 	events, err := h.tasks.Events(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

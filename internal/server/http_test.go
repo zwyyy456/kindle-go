@@ -55,6 +55,24 @@ func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 	}
 }
 
+func TestWebInternalErrorHidesDetailsAndLogsThem(t *testing.T) {
+	handler, _, _, storage := newHTTPTestHandler(t)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/books", nil))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Internal server error") || strings.Contains(response.Body.String(), "database is closed") {
+		t.Fatalf("internal error response = %d, %q", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logs.String(), "path=/books") || !strings.Contains(logs.String(), "database is closed") {
+		t.Fatalf("internal error log = %q", logs.String())
+	}
+}
+
 func TestImportAndDownloadLogsContainOnlyFileMetadata(t *testing.T) {
 	handler, service, _, _ := newHTTPTestHandler(t)
 	var output bytes.Buffer

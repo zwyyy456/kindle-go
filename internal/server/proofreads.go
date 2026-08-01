@@ -65,7 +65,7 @@ func (h Handler) handleProofreadRoute(w http.ResponseWriter, r *http.Request) {
 func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request, bookID, runID string) {
 	page, ok, err := h.proofreads.Review(r.Context(), bookID, runID, proofread.ReviewQuery{Filter: r.URL.Query().Get("filter"), Page: parseInt(r.URL.Query().Get("page"))})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	if !ok {
@@ -78,7 +78,7 @@ func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request, b
 		HasPrevious: page.HasPrevious, HasNext: page.HasNext, Total: page.Total, Unresolved: page.Unresolved, Message: r.URL.Query().Get("message"),
 	}
 	if err := proofreadTemplate.Execute(w, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 	}
 }
 

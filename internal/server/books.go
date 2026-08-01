@@ -27,7 +27,7 @@ func (h Handler) handleWebIndex(w http.ResponseWriter, r *http.Request) {
 		Search: r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"), StatusFilter: r.URL.Query().Get("status"), Page: parseInt(r.URL.Query().Get("page")),
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	data := webPageData{
@@ -45,7 +45,7 @@ func (h Handler) handleWebIndex(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := webTemplate.Execute(w, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 	}
 }
 
@@ -56,12 +56,12 @@ func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := h.settings.Current(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	books, err := h.library.LatestKindleFiles(r.Context(), values.KindleShowEPUB)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	var records []recordView
@@ -81,7 +81,7 @@ func (h Handler) handleKindleIndex(w http.ResponseWriter, r *http.Request) {
 		ShowAll: r.URL.Query().Get("all") == "1",
 	}
 	if err := kindleTemplate.Execute(w, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 	}
 }
 
@@ -110,6 +110,10 @@ func (h Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 	result, err := h.library.Import(r.Context(), library.ImportRequest{Filename: header.Filename, Reader: file, Now: time.Now()})
 	if err != nil {
 		code := library.ErrorCode(err)
+		if code == "" {
+			h.writeInternalError(w, r, err)
+			return
+		}
 		status := http.StatusInternalServerError
 		if code != "" {
 			status = http.StatusBadRequest
@@ -159,7 +163,7 @@ func (h Handler) handleImportConfirm(w http.ResponseWriter, r *http.Request, tok
 func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id string) {
 	detail, ok, err := h.library.GetBookDetail(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	if !ok {
@@ -168,12 +172,12 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 	}
 	tasks, err := h.tasks.List(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	values, err := h.proofreads.Runs(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	var runs []proofreadRunView
@@ -184,7 +188,7 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 	var generationInputs []generation.InputAssessment
 	assessments, err := h.generation.Inputs(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	for _, assessment := range assessments {
@@ -213,7 +217,7 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 	}
 	defaults, err := h.settings.Current(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	data.Defaults = defaults
@@ -221,7 +225,7 @@ func (h Handler) handleBookDetail(w http.ResponseWriter, r *http.Request, id str
 	replacements, _ := json.Marshal(defaults.TXT.Replace)
 	data.ReplaceJSON = string(replacements)
 	if err := bookTemplate.Execute(w, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 	}
 }
 
@@ -280,7 +284,7 @@ func (h Handler) handleTXTPreview(w http.ResponseWriter, r *http.Request, bookID
 		}
 	}
 	if err := txtPreviewTemplate.Execute(w, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 	}
 }
 
@@ -362,7 +366,7 @@ func (h Handler) handleKindleFileRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := h.settings.Current(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeInternalError(w, r, err)
 		return
 	}
 	h.handleDownloadWith(w, r, func(ctx context.Context, id string) (string, library.File, error) {
