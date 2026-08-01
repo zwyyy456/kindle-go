@@ -109,7 +109,6 @@ type Book struct {
 	SourceFormat    string
 	ProofreadStatus string
 	ImportedAt      time.Time
-	LegacyLastError string
 	Original        File
 	LatestArtifact  File
 }
@@ -165,9 +164,6 @@ func open(root string) (*Store, error) {
 }
 
 func (s *Store) Initialize(ctx context.Context) error {
-	if err := s.migrateLegacyIndex(ctx); err != nil {
-		return err
-	}
 	if err := s.reconcilePendingFiles(ctx); err != nil {
 		return err
 	}
@@ -284,7 +280,7 @@ func escapeLike(value string) string {
 
 func (s *Store) listBooks(ctx context.Context, where string, args ...any) ([]Book, error) {
 	query := `
-SELECT b.id, b.display_name, b.source_format, b.imported_at, b.legacy_last_error,
+SELECT b.id, b.display_name, b.source_format, b.imported_at,
        ` + proofreadStatusSQL + `,
        o.id, o.state, o.format, o.display_name, o.rel_path, o.sha256, o.size_bytes, o.created_at,
        COALESCE(a.id, ''), COALESCE(a.state, ''), COALESCE(a.format, ''), COALESCE(a.display_name, ''),
@@ -307,7 +303,7 @@ LEFT JOIN files a ON a.id = (
 		var book Book
 		var imported, originalCreated, artifactCreated string
 		if err := rows.Scan(
-			&book.ID, &book.DisplayName, &book.SourceFormat, &imported, &book.LegacyLastError, &book.ProofreadStatus,
+			&book.ID, &book.DisplayName, &book.SourceFormat, &imported, &book.ProofreadStatus,
 			&book.Original.ID, &book.Original.State, &book.Original.Format, &book.Original.DisplayName, &book.Original.RelPath, &book.Original.SHA256, &book.Original.Size, &originalCreated,
 			&book.LatestArtifact.ID, &book.LatestArtifact.State, &book.LatestArtifact.Format, &book.LatestArtifact.DisplayName, &book.LatestArtifact.RelPath, &book.LatestArtifact.SHA256, &book.LatestArtifact.Size, &artifactCreated,
 		); err != nil {

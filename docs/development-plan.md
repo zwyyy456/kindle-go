@@ -152,7 +152,7 @@ internal/
 │   ├── store.go              # SQLite 打开、事务和领域查询
 │   ├── schema.go             # migrations 与 PRAGMA
 │   ├── files.go              # 安全路径、临时文件和原子提交
-│   └── legacy.go             # index.json 一次性迁移
+│   └── revisions.go          # 修订文件提交
 ├── library/
 │   ├── model.go              # Book、File、CompatibilityReport projection
 │   ├── service.go            # 列表、详情和下载查询
@@ -271,10 +271,7 @@ SQLite store 保持 concrete，不为了测试建立一套等大的接口；测�
 ├── artifacts/<book-id>/<file-id>.<ext>
 ├── proofreads/<book-id>/<proofread-run-id>/state/{engine,...}
 ├── incoming/<operation-id>.part
-├── work/<task-id>/
-├── originals/                  # 旧版目录，迁移后继续按原路径引用
-├── converted/                  # 旧版目录，迁移后继续按原路径引用
-└── index.json                  # 旧版索引，迁移成功后保留只读备份
+└── work/<task-id>/
 ```
 
 新文件名只使用内部随机 ID 和受控扩展名。用户下载名称保存在数据库，不直接参与磁盘路径拼接。
@@ -323,7 +320,7 @@ PRAGMA busy_timeout = 5000;
 | `schema_migrations` | `version`, `applied_at` | 数据库版本与幂等迁移 |
 | `runtime_lock` | `instance_id`, `pid`, `heartbeat_at` | 阻止同一书库被两个 `serve` worker 同时执行 |
 | `settings` | `key`, `value_json`, `updated_at` | Web 全局设置覆盖值 |
-| `books` | `id`, `display_name`, `source_format`, `state`, `imported_at`, `legacy_last_error` | 书籍聚合根；`state` 为 `active/deleting`；`legacy_last_error` 只读保留旧书库最后一次同步错误，供迁移后提示，不再写入 |
+| `books` | `id`, `display_name`, `source_format`, `state`, `imported_at` | 书籍聚合根；`state` 为 `active/deleting` |
 | `files` | `id`, `book_id`, `role`, `state`, `format`, `display_name`, `rel_path`, `sha256`, `size_bytes`, `source_file_id`, `task_id`, `proofread_run_id`, `parameters_json`, `has_unresolved`, `created_at` | 原文件、修订文件、产物、报告和审计文件 |
 | `tasks` | `id`, `book_id`, `type`, `status`, `queue_seq`, `input_file_id`, `retry_of_task_id`, `parameters_json`, `stage`, `progress_current`, `progress_total`, `error_code`, `error_message`, `created_at`, `started_at`, `finished_at` | 单一持久化任务队列与进度 |
 | `task_events` | `task_id`, `seq`, `level`, `stage`, `message`, `created_at` | 面向用户和诊断的阶段事件，不保存整段正文 |
@@ -335,7 +332,7 @@ PRAGMA busy_timeout = 5000;
 
 ### 6.3 约束与索引
 
-- 新导入服务只创建 `txt` 或 `epub` 书籍；数据库允许保留旧书库中已有的其他 Kindle 可下载格式，避免迁移时丢弃历史记录。
+- 新导入服务只创建 `txt` 或 `epub` 书籍。
 - `files.role` 只能为 `original`、`revision`、`artifact`、`report`、`audit`。
 - `files.state` 只能为 `pending`、`ready`、`deleting`。
 - 每本书只能有一个 `role = original` 的文件，使用 partial unique index 保证。
@@ -356,20 +353,6 @@ PRAGMA busy_timeout = 5000;
 - 正常关闭时主动释放；异常退出由超时接管。
 
 该锁只限制后台 worker，不改变可信局域网的产品安全边界。
-
-## 7. 旧书库迁移
-
-第一次打开没有 v1 数据的数据库且发现 `index.json` 时执行一次性迁移：
-
-1. 解析旧 `Index.Records`，验证所有 `rel_path` 仍位于书库目录内。
-2. 验证原文件存在，重新计算大小、格式和 SHA-256。
-3. 每条旧记录创建一本书和一个 `original` 文件记录，继续引用旧文件路径，不移动字节。
-4. 旧 `Output` 如果存在，创建一个 `artifact` 文件记录，参数标记为 `{"legacy_import":true}`。
-5. 旧 `LastError` 写入只读迁移兼容字段并继续展示；新流程的错误只写任务记录和任务事件，迁移过程不伪造任务。
-6. 全部记录在单个 SQLite 事务中提交；任一记录失败则整个迁移回滚。
-7. 成功后写入 migration marker，但保留原 `index.json`、`originals/` 和 `converted/`，不删除或覆盖。
-
-迁移测试必须覆盖：空索引、同名文件、不安全路径、缺失原文件、已有输出和中途失败回滚。
 
 ## 8. 核心服务与流程
 
@@ -666,7 +649,7 @@ executor：
 只注册：
 
 - `GET /`：最近 24 小时内导入书籍的最新 AZW3 和可选最新 EPUB；查询参数可切换全部书籍。
-- `GET /files/{file-id}/download`：仅允许下载当前 Kindle projection 中可见的 ready 文件，包括最新产物、开启 EPUB 后选中的 EPUB，以及迁移保留的 Kindle 格式原文件。
+- `GET /files/{file-id}/download`：仅允许下载当前 Kindle projection 中可见的 ready 文件，包括最新产物和开启 EPUB 后选中的 EPUB。
 
 Kindle mux 不注册上传、任务、设置或删除路由；下载路由不能访问原始 TXT、报告、审计文件或历史产物。
 
@@ -702,23 +685,20 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 
 ### 10.1 切片一：书库与直接生成闭环
 
-#### 提交 1：SQLite store 与旧索引迁移
-
-当前流程：`server.NewLibrary` 直接加载 `index.json`。
+#### 提交 1：SQLite store 与书库持久化
 
 目标边界：concrete `store.Store` 拥有数据库和安全文件提交，`library.Service` 提供书库行为，server 不再读写 JSON 或 SQL 内部结构。
 
 修改：
 
 - 建立 schema、migration、PRAGMA、实例锁和临时数据库测试 helper。
-- 实现旧 `index.json` 单事务导入。
-- 暂时让旧 HTTP 页面通过适配 projection 读取 SQLite，行为不变。
+- 让 HTTP 页面通过适配 projection 读取 SQLite。
 
-测试：schema 幂等、外键、实例锁、旧索引成功/失败迁移、路径逃逸。
+测试：schema 幂等、外键、实例锁和路径逃逸。
 
 清理：删除 `Library.index` 直接访问；保留 `library.go` 仅作短期适配，下一提交删除。
 
-建议提交：`feat(library): persist books and legacy records in SQLite`
+建议提交：`feat(library): persist books in SQLite`
 
 #### 提交 2：不可变导入与大小限制
 
@@ -938,7 +918,6 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 - 任务完成与取消竞争。
 - 进程在文件 rename 前后退出时的启动收敛。
 - 两个 `serve` 实例争抢同一书库。
-- 旧 `index.json` 部分损坏时零修改回滚。
 - 全局设置改变后已排队任务仍使用旧参数快照。
 - 同一字符串多次出现时只应用候选绑定的位置。
 - 两个候选范围重叠时禁止同时应用。
@@ -990,19 +969,17 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 ### 14.1 发布前
 
 - 数据库 migration 只能向前追加，不修改已发布 migration。
-- 在现有书库副本上完成旧索引迁移演练。
 - 备份并恢复一次 `library.db`、WAL 和全部文件目录。
 - README 明确 Python/Codex 依赖、文件限制和任务从头重试行为。
 
 ### 14.2 升级
 
-- App 先打开 SQLite 并运行向前 schema migration，再取得实例锁；取得锁后才运行旧索引导入、pending/deleting 收敛并启动 worker 与 HTTP。
+- App 先打开 SQLite 并运行向前 schema migration，再取得实例锁；取得锁后才运行 pending/deleting 收敛并启动 worker 与 HTTP。
 - migration 失败时不启动 HTTP/worker，并打印具体版本和错误。
 - 旧文件不移动，降低首次升级风险。
 
 ### 14.3 回滚
 
-- 旧 `index.json` 和旧目录保持不变，因此可以回退查看旧书库状态。
 - 新版本创建的多产物和任务不会被旧版本识别；回滚只用于紧急读取旧数据，不承诺双向写兼容。
 - 任何数据库恢复必须同时恢复对应文件目录快照，不能只复制 `library.db`。
 
@@ -1010,7 +987,6 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 
 每个切片结束必须搜索并处理：
 
-- 旧 `index.json` 写路径。
 - `Record.Output` 和单最新产物假设。
 - HTTP handler 内的直接 `os.Create`、`os.Remove` 或同步转换。
 - `Library.index` 或数据库内部结构越层访问。
@@ -1043,7 +1019,7 @@ python3 long-epub-proofreader/scripts/test_epub_proofread_workflow.py
 - 默认测试不依赖真实 Codex、网络、Calibre 或 Kindle。
 - 至少一次真实 Codex TXT 校对和一次真实 Codex EPUB 校对完成端到端验证。
 - 至少一台目标 Kindle 真机完成中文书名浏览和 AZW3 下载。
-- 旧书库迁移、App 重启、任务取消、磁盘半成品清理和整书删除均经过故障注入验证。
+- App 重启、任务取消、磁盘半成品清理和整书删除均经过故障注入验证。
 - README、示例配置、产品文档、数据库行为和 UI 文案一致。
 - `internal/server/library.go` 的旧 JSON 单产物实现和同步 Web 转换路径已删除。
 - 没有同时存在的新旧任务状态、文件提交或校对执行路径。

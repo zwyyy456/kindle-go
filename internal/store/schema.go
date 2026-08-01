@@ -51,8 +51,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
             display_name TEXT NOT NULL,
             source_format TEXT NOT NULL,
             state TEXT NOT NULL CHECK (state IN ('active', 'deleting')) DEFAULT 'active',
-            imported_at TEXT NOT NULL,
-            legacy_last_error TEXT NOT NULL DEFAULT ''
+            imported_at TEXT NOT NULL
         )`,
 		`CREATE TABLE tasks (
             id TEXT PRIMARY KEY,

@@ -200,11 +200,8 @@ func (s *Service) LatestKindleFiles(ctx context.Context, showEPUB bool) ([]Kindl
 }
 
 func kindleFileRecords(files []store.File, showEPUB bool) []store.File {
-	var azw3, epub, original store.File
+	var azw3, epub store.File
 	for _, file := range files {
-		if original.ID == "" && file.Role == "original" {
-			original = file
-		}
 		if azw3.ID == "" && file.Role == "artifact" && file.Format == "azw3" {
 			azw3 = file
 		}
@@ -219,9 +216,6 @@ func kindleFileRecords(files []store.File, showEPUB bool) []store.File {
 	}
 	if epub.ID != "" {
 		selected = append(selected, epub)
-	}
-	if len(selected) == 0 && kindleLegacyOriginalFormat(original.Format) {
-		selected = append(selected, original)
 	}
 	return selected
 }
@@ -266,7 +260,6 @@ func bookFromStore(value store.Book) Book {
 	return Book{
 		ID: value.ID, DisplayName: value.DisplayName, SourceFormat: value.SourceFormat, ImportedAt: value.ImportedAt,
 		ProofreadStatus: value.ProofreadStatus,
-		LegacyLastError: value.LegacyLastError,
 		Original:        fileFromStore(value.Original), LatestArtifact: fileFromStore(value.LatestArtifact),
 	}
 }
@@ -276,14 +269,5 @@ func fileFromStore(value store.File) File {
 		ID: value.ID, BookID: value.BookID, Role: value.Role, Format: value.Format, DisplayName: value.DisplayName,
 		SHA256: value.SHA256, Size: value.Size, SourceFileID: value.SourceFileID, TaskID: value.TaskID, ProofreadRunID: value.ProofreadRunID,
 		ParametersJSON: value.ParametersJSON, HasUnresolved: value.HasUnresolved, CreatedAt: value.CreatedAt,
-	}
-}
-
-func kindleLegacyOriginalFormat(format string) bool {
-	switch format {
-	case "azw3", "mobi", "pdf":
-		return true
-	default:
-		return false
 	}
 }

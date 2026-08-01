@@ -85,7 +85,6 @@ type Book struct {
 	SourceFormat    string
 	ProofreadStatus string
 	ImportedAt      time.Time
-	LegacyLastError string
 	Original        File
 	LatestArtifact  File
 }

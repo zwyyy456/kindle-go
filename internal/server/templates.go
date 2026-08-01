@@ -60,7 +60,6 @@ var webTemplate = template.Must(template.New("web").Parse(`<!doctype html>
   <section class="record">
     <h2><a href="/books/{{.ID}}">{{.OriginalName}}</a></h2>
     <p class="muted">Uploaded {{.UploadedAt}} · proofread: {{.ProofreadStatus}}</p>
-    {{if .LastError}}<p class="error">{{.LastError}}</p>{{end}}
     <div class="files">
       {{range .Files}}
         <p><a href="{{.URL}}">{{.Name}}</a> <span class="muted">{{.Kind}}, {{.Format}}, {{.Size}}</span></p>

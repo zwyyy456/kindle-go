@@ -20,7 +20,6 @@ func (h Handler) recordViews(records []library.Book) []recordView {
 			ID:              record.ID,
 			OriginalName:    record.DisplayName,
 			UploadedAt:      record.ImportedAt.Format("2006-01-02 15:04"),
-			LastError:       record.LegacyLastError,
 			ProofreadStatus: record.ProofreadStatus,
 		}
 		view.Files = displayFileViews(record)
@@ -189,7 +188,6 @@ type recordView struct {
 	ID              string
 	OriginalName    string
 	UploadedAt      string
-	LastError       string
 	Files           []fileView
 	InputFormat     string
 	TitleDefault    string

@@ -216,10 +216,9 @@ trusted. Do not bind or forward these ports to an untrusted or public network.
 
 The Kindle page is deliberately plain HTML. By default it lists the latest AZW3 for books imported
 in the last 24 hours, with an option to show all books. When “Show latest EPUB” is enabled globally,
-the latest EPUB is shown alongside the AZW3 for the same set of books. Legacy MOBI/PDF originals
-remain downloadable after library migration. The Kindle listener only serves files selected by
-this latest-file projection; original TXT files, reports, audits, and historical artifacts remain
-available only from the desktop Web UI.
+the latest EPUB is shown alongside the AZW3 for the same set of books. The Kindle listener only
+serves files selected by this latest-file projection; original TXT files, reports, audits, and
+historical artifacts remain available only from the desktop Web UI.
 
 Before a release, run `tools/test.sh`. The remaining environment checks are manual: complete one
 real Codex TXT run, one real Codex EPUB run, and verify Chinese book browsing plus AZW3 download on
