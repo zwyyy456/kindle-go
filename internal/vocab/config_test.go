@@ -3,6 +3,7 @@ package vocab
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,25 @@ path = "cards.json"
 	}
 	if cfg.Output.ReviewPath != "review.jsonl" {
 		t.Fatalf("Output.ReviewPath = %q", cfg.Output.ReviewPath)
+	}
+}
+
+func TestLoadConfigRejectsInvalidNumericOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name, key, value string
+	}{
+		{name: "batch size", key: "ai.batch_size", value: "many"},
+		{name: "minimum confidence", key: "ai.min_confidence", value: "often"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "kindle2flashdict.toml")
+			if err := os.WriteFile(path, []byte("[ai]\n"+strings.Replace(test.key, "ai.", "", 1)+" = "+test.value+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), test.key) {
+				t.Fatalf("LoadConfig error = %v", err)
+			}
+		})
 	}
 }
 

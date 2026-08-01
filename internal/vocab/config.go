@@ -53,9 +53,17 @@ func LoadConfig(path string) (Config, error) {
 		case "ai.codex_path":
 			cfg.AI.CodexPath = value
 		case "ai.batch_size":
-			cfg.AI.BatchSize, _ = strconv.Atoi(value)
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return cfg, fmt.Errorf("ai.batch_size must be an integer: %w", err)
+			}
+			cfg.AI.BatchSize = parsed
 		case "ai.min_confidence":
-			cfg.AI.MinConfidence, _ = strconv.ParseFloat(value, 64)
+			parsed, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return cfg, fmt.Errorf("ai.min_confidence must be a number: %w", err)
+			}
+			cfg.AI.MinConfidence = parsed
 		case "output.type":
 			cfg.Output.Type = value
 		case "output.path":
