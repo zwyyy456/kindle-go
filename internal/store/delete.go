@@ -15,6 +15,11 @@ type ActiveTasksError struct {
 	Count  int
 }
 
+type ReferencedFileError struct {
+	FileID string
+	Count  int
+}
+
 type bookDeletionPaths struct {
 	files           []string
 	proofreadStates []string
@@ -22,6 +27,10 @@ type bookDeletionPaths struct {
 
 func (e *ActiveTasksError) Error() string {
 	return fmt.Sprintf("book_has_active_tasks: book %s has %d queued or running task(s)", e.BookID, e.Count)
+}
+
+func (e *ReferencedFileError) Error() string {
+	return fmt.Sprintf("file_has_references: file %s is referenced by %d ready or pending file(s)", e.FileID, e.Count)
 }
 
 func (s *Store) DeleteBook(ctx context.Context, bookID string) error {
@@ -42,6 +51,13 @@ func (s *Store) DeleteArtifact(ctx context.Context, fileID string) error {
 		return err
 	}
 	defer tx.Rollback()
+	var references int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE source_file_id = ? AND state IN ('ready', 'pending')`, fileID).Scan(&references); err != nil {
+		return err
+	}
+	if references != 0 {
+		return &ReferencedFileError{FileID: fileID, Count: references}
+	}
 	var role, relPath string
 	if err := tx.QueryRowContext(ctx, `SELECT role, rel_path FROM files WHERE id = ? AND state = 'ready'`, fileID).Scan(&role, &relPath); errors.Is(err, sql.ErrNoRows) {
 		return os.ErrNotExist

@@ -163,6 +163,85 @@ func TestDeleteArtifactPreservesOriginalAndBook(t *testing.T) {
 	}
 }
 
+func TestDeleteReferencedRevisionIsRejected(t *testing.T) {
+	storage, book := deletionFixture(t)
+
+	revisionTask, err := storage.CreateTask(context.Background(), CreateTaskParams{
+		BookID: book.ID, Type: "build_revision_txt", InputFileID: book.Original.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{"build_revision_txt"}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim revision = %v, %v", ok, err)
+	}
+	revisionWorkRel := filepath.ToSlash(filepath.Join("work", revisionTask.ID, "revision-output"))
+	revisionWorkPath, err := storage.ResolveRel(revisionWorkRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(revisionWorkPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{
+		"revision.txt": "修订内容",
+		"report.md":    "报告",
+		"audit.jsonl":  "{}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(revisionWorkPath, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revisionResult, err := storage.CommitRevision(context.Background(), RevisionCommit{
+		BookID: book.ID, SourceFileID: book.Original.ID, TaskID: revisionTask.ID,
+		Format: "txt", RevisionName: "book-revised.txt", ReportName: "book-report.md", AuditName: "book-audit.jsonl",
+		WorkDirRel: revisionWorkRel, CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	artifactTask, err := storage.CreateTask(context.Background(), CreateTaskParams{
+		BookID: book.ID, Type: "generate_epub", InputFileID: revisionResult.Revision.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := storage.ClaimNextTask(context.Background(), []string{"generate_epub"}, time.Now()); err != nil || !ok {
+		t.Fatalf("claim artifact = %v, %v", ok, err)
+	}
+	artifactWorkRel := filepath.ToSlash(filepath.Join("work", artifactTask.ID, "artifact.epub"))
+	artifactWorkPath, err := storage.ResolveRel(artifactWorkRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(artifactWorkPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifactWorkPath, []byte("artifact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := storage.CommitArtifact(context.Background(), ArtifactCommit{
+		BookID: book.ID, SourceFileID: revisionResult.Revision.ID, TaskID: artifactTask.ID,
+		Format: "epub", DisplayName: "book.epub", WorkRelPath: artifactWorkRel, CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = storage.DeleteArtifact(context.Background(), revisionResult.Revision.ID)
+	var referenced *ReferencedFileError
+	if !errors.As(err, &referenced) || referenced.FileID != revisionResult.Revision.ID || referenced.Count != 1 {
+		t.Fatalf("delete referenced revision error = %v", err)
+	}
+	for _, id := range []string{revisionResult.Revision.ID, artifact.ID} {
+		file, ok, err := storage.File(context.Background(), id)
+		if err != nil || !ok || file.State != "ready" {
+			t.Fatalf("referenced file %s after rejected deletion = %#v, %v, %v", id, file, ok, err)
+		}
+	}
+}
+
 func TestDeleteBookDoesNotTouchExternalImportSource(t *testing.T) {
 	externalDir := t.TempDir()
 	externalPath := filepath.Join(externalDir, "outside.txt")
