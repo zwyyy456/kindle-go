@@ -272,7 +272,10 @@ func newProofreadTest(t *testing.T) (*store.Store, *library.Service, *appsetting
 		t.Fatal(err)
 	}
 	libraryService := library.New(storage)
-	t.Cleanup(func() { _ = libraryService.Close() })
+	t.Cleanup(func() {
+		_ = libraryService.Close()
+		_ = storage.Close()
+	})
 	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{})
 	if err := settingsService.Initialize(context.Background()); err != nil {
 		t.Fatal(err)

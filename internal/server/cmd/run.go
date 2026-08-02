@@ -64,6 +64,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer storage.Close()
 	libraryService := library.New(storage)
 	defer libraryService.Close()
 	runtime := appsettings.Runtime{

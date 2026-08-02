@@ -758,7 +758,10 @@ func newHTTPTestHandler(t *testing.T) (Handler, *library.Service, *task.Service,
 		t.Fatal(err)
 	}
 	service := library.New(storage)
-	t.Cleanup(func() { _ = service.Close() })
+	t.Cleanup(func() {
+		_ = service.Close()
+		_ = storage.Close()
+	})
 	taskService := task.NewService(storage)
 	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{LibraryDir: storage.Root(), LibrarySource: "test"})
 	if err := settingsService.Initialize(context.Background()); err != nil {

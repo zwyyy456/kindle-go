@@ -189,6 +189,26 @@ func TestDuplicateTokenExpiresAndCancelDiscardsIncoming(t *testing.T) {
 	assertIncomingCount(t, root, 0)
 }
 
+func TestCloseDiscardsPendingImportsWithoutClosingStore(t *testing.T) {
+	service, root := newTestService(t)
+	if _, err := service.Import(context.Background(), ImportRequest{Filename: "book.txt", Reader: strings.NewReader("same")}); err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := service.Import(context.Background(), ImportRequest{Filename: "copy.txt", Reader: strings.NewReader("same")})
+	if err != nil || !duplicate.Duplicate {
+		t.Fatalf("duplicate = %#v, %v", duplicate, err)
+	}
+	assertIncomingCount(t, root, 1)
+
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertIncomingCount(t, root, 0)
+	if _, err := service.store.AllBooks(context.Background()); err != nil {
+		t.Fatalf("store was closed by library service: %v", err)
+	}
+}
+
 func TestSameNameDifferentContentIsNotDuplicate(t *testing.T) {
 	service, _ := newTestService(t)
 	for _, content := range []string{"one", "two"} {
@@ -263,7 +283,10 @@ func newTestService(t *testing.T) (*Service, string) {
 		t.Fatal(err)
 	}
 	service := New(storage)
-	t.Cleanup(func() { _ = service.Close() })
+	t.Cleanup(func() {
+		_ = service.Close()
+		_ = storage.Close()
+	})
 	return service, root
 }
 

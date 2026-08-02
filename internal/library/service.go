@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"sync"
 	"time"
@@ -38,14 +39,17 @@ func New(source *store.Store) *Service {
 	}
 }
 
+// Close discards pending imports owned by the service. The caller that opened
+// the backing Store remains responsible for closing it after the service.
 func (s *Service) Close() error {
 	s.mu.Lock()
+	var cleanupErr error
 	for token, pending := range s.pending {
-		_ = s.store.DiscardIncoming(pending.incoming)
+		cleanupErr = errors.Join(cleanupErr, s.store.DiscardIncoming(pending.incoming))
 		delete(s.pending, token)
 	}
 	s.mu.Unlock()
-	return s.store.Close()
+	return cleanupErr
 }
 
 func (s *Service) GetBook(ctx context.Context, id string) (Book, bool, error) {

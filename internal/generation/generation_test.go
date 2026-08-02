@@ -295,6 +295,7 @@ func TestEPUBGenerationRequiresPersistedReportAndRechecksSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	libraryService := library.New(storage)
+	defer storage.Close()
 	defer libraryService.Close()
 	taskService := task.NewService(storage)
 	settingsService := appsettings.New(storage, txtconfig.Defaults(), appsettings.Runtime{})
@@ -364,7 +365,10 @@ func newGenerationTest(t *testing.T) (*store.Store, *library.Service, *task.Serv
 		t.Fatal(err)
 	}
 	libraryService := library.New(storage)
-	t.Cleanup(func() { _ = libraryService.Close() })
+	t.Cleanup(func() {
+		_ = libraryService.Close()
+		_ = storage.Close()
+	})
 	result, err := libraryService.Import(context.Background(), library.ImportRequest{
 		Filename: "book.txt", Reader: strings.NewReader("第一章 开始\n\n正文。"), Now: time.Now(),
 	})
