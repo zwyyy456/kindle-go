@@ -44,6 +44,7 @@ func LookupFlashDictSenses(cfg Config, records []KindleRecord) (map[string]Flash
 		byID[record.RequestID] = record
 	}
 	responses := map[string]FlashDictLookupResponse{}
+	seen := map[string]bool{}
 	var reviews []ReviewRecord
 	lookupFailures := 0
 	scanner := bufio.NewScanner(conn)
@@ -56,6 +57,7 @@ func LookupFlashDictSenses(cfg Config, records []KindleRecord) (map[string]Flash
 		if err := json.Unmarshal([]byte(line), &response); err != nil {
 			return nil, nil, 0, fmt.Errorf("decode FlashDict lookup bridge response: %w", err)
 		}
+		seen[response.RequestID] = true
 		record := byID[response.RequestID]
 		if response.Status != "ok" || len(response.Candidates) == 0 {
 			lookupFailures++
@@ -72,7 +74,25 @@ func LookupFlashDictSenses(cfg Config, records []KindleRecord) (map[string]Flash
 		}
 		responses[response.RequestID] = response
 	}
-	return responses, reviews, lookupFailures, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return responses, reviews, lookupFailures, err
+	}
+	for _, record := range records {
+		if seen[record.RequestID] {
+			continue
+		}
+		lookupFailures++
+		reviews = append(reviews, ReviewRecord{
+			RequestID: record.RequestID,
+			Term:      record.Term,
+			Usage:     record.Usage,
+			BookTitle: record.BookTitle,
+			Location:  record.Location,
+			Reason:    "lookup_missing_response",
+			Error:     "FlashDict lookup bridge returned no response",
+		})
+	}
+	return responses, reviews, lookupFailures, nil
 }
 
 type lookupBridgeDiscovery struct {
