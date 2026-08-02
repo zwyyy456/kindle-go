@@ -3,7 +3,6 @@ package proofread
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -268,40 +267,18 @@ func copyTree(source, target string) error {
 
 func compatibilityRecord(filename string, now time.Time) (store.CompatibilityRecord, error) {
 	analysis := epub.Analyze(filename, epub.Options{DefaultLanguage: "zh-CN"})
-	metadata, err := json.Marshal(struct {
-		Metadata epub.MetadataInfo `json:"metadata"`
-		Cover    epub.CoverInfo    `json:"cover"`
-	}{analysis.Metadata, analysis.Cover})
+	snapshot, err := analysis.CompatibilitySnapshot()
 	if err != nil {
 		return store.CompatibilityRecord{}, err
-	}
-	spine, err := json.Marshal(analysis.Spine)
-	if err != nil {
-		return store.CompatibilityRecord{}, err
-	}
-	toc, err := json.Marshal(analysis.TOC)
-	if err != nil {
-		return store.CompatibilityRecord{}, err
-	}
-	resources, err := json.Marshal(analysis.Resources)
-	if err != nil {
-		return store.CompatibilityRecord{}, err
-	}
-	issues, err := json.Marshal(analysis.Issues)
-	if err != nil {
-		return store.CompatibilityRecord{}, err
-	}
-	status := "passed"
-	if !analysis.Compatible() {
-		status = "failed"
 	}
 	digest, _, err := hashPath(filename)
 	if err != nil {
 		return store.CompatibilityRecord{}, err
 	}
 	return store.CompatibilityRecord{
-		SourceSHA256: digest, Status: status, MetadataJSON: string(metadata), SpineJSON: string(spine), TOCJSON: string(toc),
-		ResourcesJSON: string(resources), IssuesJSON: string(issues), CheckedAt: now,
+		SourceSHA256: digest, Status: snapshot.Status,
+		MetadataJSON: snapshot.MetadataJSON, SpineJSON: snapshot.SpineJSON, TOCJSON: snapshot.TOCJSON,
+		ResourcesJSON: snapshot.ResourcesJSON, IssuesJSON: snapshot.IssuesJSON, CheckedAt: now,
 	}, nil
 }
 
