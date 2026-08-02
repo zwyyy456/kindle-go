@@ -1,39 +1,35 @@
-package main
+package transfer
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
 
-func runR2Probe(args []string) error {
-	fs := flag.NewFlagSet("transferdemo r2-probe", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	endpoint := fs.String("endpoint", "", "R2 S3 endpoint")
-	bucket := fs.String("bucket", "", "R2 bucket")
-	accessKey := fs.String("access-key-id", "", "R2 access key ID")
-	secretKey := fs.String("secret-access-key", "", "R2 secret access key")
-	origin := fs.String("origin", "", "browser origin to verify against bucket CORS")
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	backend, err := newR2Backend(*endpoint, *bucket, *accessKey, *secretKey)
+// R2ProbeConfig configures the explicit real-service acceptance probe.
+type R2ProbeConfig struct {
+	R2Config
+	Origin string
+	Stdout io.Writer
+}
+
+// ProbeR2 verifies the configured R2 data plane, including CORS, Range, metadata, and deletion.
+func ProbeR2(ctx context.Context, config R2ProbeConfig) error {
+	backend, err := newR2Backend(config.Endpoint, config.Bucket, config.AccessKeyID, config.SecretAccessKey)
 	if err != nil {
 		return err
 	}
-	payload := []byte("transferdemo R2 acceptance " + time.Now().UTC().Format(time.RFC3339Nano))
+	out := config.Stdout
+	if out == nil {
+		out = io.Discard
+	}
+	payload := []byte("transfer R2 acceptance " + time.Now().UTC().Format(time.RFC3339Nano))
 	sum := sha256.Sum256(payload)
 	shaHex := fmt.Sprintf("%x", sum[:])
 	checksumB64 := base64.StdEncoding.EncodeToString(sum[:])
@@ -41,39 +37,39 @@ func runR2Probe(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("object: %s\n", objectID)
+	fmt.Fprintf(out, "object: %s\n", objectID)
 
-	auth, err := backend.PresignPut(context.Background(), objectID, int64(len(payload)),
+	auth, err := backend.PresignPut(ctx, objectID, int64(len(payload)),
 		"text/plain", shaHex, time.Now().Add(10*time.Minute))
 	if err != nil {
 		return err
 	}
-	if *origin != "" {
-		if err := probeR2CORS(auth.URL, *origin, "content-type, x-amz-meta-sha256"); err != nil {
+	if config.Origin != "" {
+		if err := probeR2CORS(ctx, auth.URL, config.Origin, "content-type, x-amz-meta-sha256"); err != nil {
 			return err
 		}
-		fmt.Println("CORS preflight: success")
+		fmt.Fprintln(out, "CORS preflight: success")
 	}
-	etag, err := putProbeObject(backend.client, auth, payload, *origin)
+	etag, err := putProbeObject(ctx, backend.client, auth, payload, config.Origin)
 	if err != nil {
 		return err
 	}
-	info, err := backend.Head(context.Background(), objectID)
+	info, err := backend.Head(ctx, objectID)
 	if err != nil {
 		return err
 	}
 	if info.Size != int64(len(payload)) || info.SHA256 != shaHex || normalizeETag(info.ETag) != normalizeETag(etag) {
 		return fmt.Errorf("HEAD mismatch: size=%d etag=%q metadata-sha256=%q", info.Size, info.ETag, info.SHA256)
 	}
-	fmt.Println("baseline PUT + HEAD: success")
-	if err := probeR2Range(backend, objectID, payload); err != nil {
+	fmt.Fprintln(out, "baseline PUT + HEAD: success")
+	if err := probeR2Range(ctx, backend, objectID, payload); err != nil {
 		return err
 	}
-	fmt.Println("GET Range: success")
-	if err := backend.Delete(context.Background(), objectID); err != nil {
+	fmt.Fprintln(out, "GET Range: success")
+	if err := backend.Delete(ctx, objectID); err != nil {
 		return err
 	}
-	fmt.Println("C-side DELETE: success")
+	fmt.Fprintln(out, "C-side DELETE: success")
 
 	checksumObject, _ := randomHex(objectIDN)
 	checksumHeaders := map[string]string{
@@ -92,23 +88,23 @@ func runR2Probe(args []string) error {
 			"x-amz-checksum-sha256": checksumB64,
 		},
 	}
-	if *origin != "" {
-		if err := probeR2CORS(checksumURL, *origin, "content-type, x-amz-meta-sha256, x-amz-checksum-sha256"); err != nil {
-			fmt.Printf("checksum CORS capability: unavailable (%v)\n", err)
+	if config.Origin != "" {
+		if err := probeR2CORS(ctx, checksumURL, config.Origin, "content-type, x-amz-meta-sha256, x-amz-checksum-sha256"); err != nil {
+			fmt.Fprintf(out, "checksum CORS capability: unavailable (%v)\n", err)
 		}
 	}
-	checksumETag, checksumErr := putProbeObject(backend.client, checksumAuth, payload, *origin)
+	checksumETag, checksumErr := putProbeObject(ctx, backend.client, checksumAuth, payload, config.Origin)
 	if checksumErr != nil {
-		fmt.Printf("x-amz-checksum-sha256 capability: unavailable (%v)\n", checksumErr)
+		fmt.Fprintf(out, "x-amz-checksum-sha256 capability: unavailable (%v)\n", checksumErr)
 		return nil
 	}
-	checksumInfo, headErr := backend.Head(context.Background(), checksumObject)
+	checksumInfo, headErr := backend.Head(ctx, checksumObject)
 	if headErr != nil {
 		return headErr
 	}
-	fmt.Printf("x-amz-checksum-sha256 capability: accepted; ETag=%s; HEAD metadata SHA-256=%s\n",
+	fmt.Fprintf(out, "x-amz-checksum-sha256 capability: accepted; ETag=%s; HEAD metadata SHA-256=%s\n",
 		checksumETag, checksumInfo.SHA256)
-	_ = backend.Delete(context.Background(), checksumObject)
+	_ = backend.Delete(ctx, checksumObject)
 
 	badObject, _ := randomHex(objectIDN)
 	badURL, err := backend.presign(http.MethodPut, badObject, checksumHeaders, nil, time.Now().Add(10*time.Minute))
@@ -117,16 +113,16 @@ func runR2Probe(args []string) error {
 	}
 	badAuth := checksumAuth
 	badAuth.URL = badURL
-	if _, err := putProbeObject(backend.client, badAuth, append(payload, '!'), *origin); err == nil {
-		_ = backend.Delete(context.Background(), badObject)
+	if _, err := putProbeObject(ctx, backend.client, badAuth, append(payload, '!'), config.Origin); err == nil {
+		_ = backend.Delete(ctx, badObject)
 		return fmt.Errorf("R2 accepted a body that did not match x-amz-checksum-sha256")
 	}
-	fmt.Println("BadDigest behavior: success (mismatched body rejected)")
+	fmt.Fprintln(out, "BadDigest behavior: success (mismatched body rejected)")
 	return nil
 }
 
-func putProbeObject(client *http.Client, auth authorizedURL, payload []byte, origin string) (string, error) {
-	request, err := http.NewRequest(http.MethodPut, auth.URL, bytes.NewReader(payload))
+func putProbeObject(ctx context.Context, client *http.Client, auth authorizedURL, payload []byte, origin string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, auth.URL, bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
@@ -154,8 +150,8 @@ func putProbeObject(client *http.Client, auth authorizedURL, payload []byte, ori
 	return response.Header.Get("ETag"), nil
 }
 
-func probeR2CORS(target, origin, headers string) error {
-	request, err := http.NewRequest(http.MethodOptions, target, nil)
+func probeR2CORS(ctx context.Context, target, origin, headers string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodOptions, target, nil)
 	if err != nil {
 		return err
 	}
@@ -191,12 +187,12 @@ func headerListContains(value, wanted string) bool {
 	return false
 }
 
-func probeR2Range(backend *r2Backend, objectID string, payload []byte) error {
-	auth, err := backend.PresignGet(context.Background(), objectID, "probe.txt", time.Now().Add(10*time.Minute))
+func probeR2Range(ctx context.Context, backend *r2Backend, objectID string, payload []byte) error {
+	auth, err := backend.PresignGet(ctx, objectID, "probe.txt", time.Now().Add(10*time.Minute))
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequest(http.MethodGet, auth.URL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, auth.URL, nil)
 	if err != nil {
 		return err
 	}

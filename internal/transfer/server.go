@@ -1,9 +1,10 @@
-package main
+package transfer
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -25,7 +26,7 @@ const (
 	maxSessionSignals = 512 << 10
 )
 
-type Server struct {
+type controlServer struct {
 	Addr            string
 	Stdout          io.Writer
 	store           signalStore
@@ -39,13 +40,13 @@ type Server struct {
 	httpClient      *http.Client
 }
 
-func (s *Server) Run() error {
+func (s *controlServer) RunContext(ctx context.Context) error {
 	addr := s.Addr
 	if addr == "" {
 		addr = defaultAddr
 	}
 	if s.Stdout != nil {
-		fmt.Fprintln(s.Stdout, "WebRTC demo server started.")
+		fmt.Fprintln(s.Stdout, "Transfer control server started.")
 		fmt.Fprintln(s.Stdout)
 		for _, url := range urls(addr) {
 			fmt.Fprintf(s.Stdout, "  %s\n", url)
@@ -59,16 +60,31 @@ func (s *Server) Run() error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	server.RegisterOnShutdown(cancel)
 	if s.control != nil {
-		go s.runCleanup(ctx)
+		go s.runCleanup(runCtx)
 	}
-	return server.ListenAndServe()
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		return ctx.Err()
+	}
 }
 
-func (s *Server) routes() http.Handler {
+func (s *controlServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/sender", s.handleSender)
@@ -90,7 +106,7 @@ func (s *Server) routes() http.Handler {
 	return mux
 }
 
-func (s *Server) handleClientConfig(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleClientConfig(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -102,7 +118,7 @@ func (s *Server) handleClientConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleSHA256Worker(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleSHA256Worker(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -111,7 +127,7 @@ func (s *Server) handleSHA256Worker(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, sha256WorkerJS)
 }
 
-func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleHost(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -122,7 +138,7 @@ func (s *Server) handleHost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"host": host})
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
@@ -133,28 +149,28 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	writeHTML(w, receiverHTML)
 }
 
-func (s *Server) handleSender(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleSender(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
 	writeHTML(w, senderHTML)
 }
 
-func (s *Server) handleReceiver(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleReceiver(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
 	writeHTML(w, receiverHTML)
 }
 
-func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
 	writeHTML(w, receiverHTML)
 }
 
-func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -197,7 +213,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -228,7 +244,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleSignal(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -252,7 +268,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]int{"seq": seq})
 }
 
-func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handlePoll(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -272,7 +288,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string][]signalMessage{"messages": messages})
 }
 
-func (s *Server) handleHTTPSample(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleHTTPSample(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -282,7 +298,7 @@ func (s *Server) handleHTTPSample(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "If this works on Kindle but the WebRTC receiver does not, the Kindle browser is using the HTTP path.")
 }
 
-func (s *Server) handleServiceWorker(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleServiceWorker(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -1434,7 +1450,7 @@ function prepareServiceWorkerDownload(blob, name, type) {
     return;
   }
   if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
-    status.innerHTML = "Service Worker needs HTTPS. This HTTP LAN-IP demo cannot test final save.";
+    status.innerHTML = "Service Worker needs HTTPS. This HTTP LAN-IP page cannot test final save.";
     log("Service Worker unavailable on non-HTTPS LAN IP.");
     return;
   }

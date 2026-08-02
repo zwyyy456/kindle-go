@@ -1,4 +1,4 @@
-package main
+package transfer
 
 import (
 	"bytes"
@@ -45,7 +45,7 @@ func (f *fakeObjectBackend) Delete(_ requestContext, objectID string) error {
 	return nil
 }
 
-func newControlHandler(t *testing.T, configure func(*Server)) (http.Handler, *sessionStore, string) {
+func newControlHandler(t *testing.T, configure func(*controlServer)) (http.Handler, *sessionStore, string) {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := openSessionStore(filepath.Join(dir, "control.db"))
@@ -53,7 +53,7 @@ func newControlHandler(t *testing.T, configure func(*Server)) (http.Handler, *se
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	server := &Server{control: store, offlineLifetime: 2 * time.Hour}
+	server := &controlServer{control: store, offlineLifetime: 2 * time.Hour}
 	if configure != nil {
 		configure(server)
 	}
@@ -89,7 +89,7 @@ func postManaged(t *testing.T, handler http.Handler, target, token, etag string)
 func TestControlR2FlowUsesDirectDataPlaneAndVerifiesHead(t *testing.T) {
 	payload := []byte("r2 payload")
 	fake := &fakeObjectBackend{}
-	handler, _, _ := newControlHandler(t, func(server *Server) { server.r2 = fake })
+	handler, _, _ := newControlHandler(t, func(server *controlServer) { server.r2 = fake })
 	created := createTransferViaAPI(t, handler, modeR2, payload)
 	if got := postManaged(t, handler, "/api/transfers/"+created.Code+"/upload-started", created.ManagementToken, ""); got.Code != http.StatusOK {
 		t.Fatalf("start = %d %q", got.Code, got.Body.String())
@@ -154,7 +154,7 @@ func TestControlServerAEndToEnd(t *testing.T) {
 	storage, storageHandler, _ := newTestStorage(t)
 	storage.AllowedOrigin = origin
 	storageClient := &http.Client{Transport: handlerRoundTripper{handler: storageHandler}}
-	handler, controlStore, _ := newControlHandler(t, func(server *Server) {
+	handler, controlStore, _ := newControlHandler(t, func(server *controlServer) {
 		server.publicURL = origin
 		server.storageBaseURL = "https://storage.test"
 		server.storageSecret = storage.Secret

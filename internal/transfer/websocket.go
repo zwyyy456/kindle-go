@@ -1,4 +1,4 @@
-package main
+package transfer
 
 import (
 	"bufio"
@@ -21,7 +21,7 @@ const (
 	maxWebSocketPayload = 64 << 10
 )
 
-func (s *Server) handleWebSocketProbe(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleWebSocketProbe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet || !headerHasToken(r.Header, "Connection", "upgrade") ||
 		!strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
 		http.Error(w, "WebSocket upgrade required", http.StatusUpgradeRequired)

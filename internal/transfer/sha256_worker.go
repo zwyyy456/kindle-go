@@ -1,4 +1,4 @@
-package main
+package transfer
 
 // Incremental SHA-256 worker. WebCrypto digest() is deliberately not used:
 // it is one-shot and would require retaining the whole file in memory.

@@ -5,6 +5,8 @@
 - `vocab export`: reads Kindle Vocabulary Builder records, asks FlashDict for split sense candidates, uses `codex exec` to pick the sense that matches each usage sentence, and writes a FlashDict flashcard JSON file.
 - `txt2epub`: converts Simplified Chinese TXT files to EPUB/native AZW3 and reflowable text EPUB files to native AZW3.
 - `serve`: runs a LAN Web UI for uploads/conversion and a Kindle-friendly download page.
+- `transfer`: sends one file behind a six-digit pickup code using WebRTC for online modern browsers
+  or R2/independent storage for offline and Kindle downloads.
 
 The implementation keeps everything in one Go CLI binary.
 
@@ -46,10 +48,16 @@ file, and local-network boundaries.
 - `internal/epub`: shared EPUB reader and writer.
 - `internal/azw3`: native AZW3/KF8 writer.
 - `internal/proofread`: bundled workflow process runner and structured Codex CLI adapter.
+- `internal/transfer`: six-digit sessions, WebRTC signaling, and R2/Server A offline transfer paths.
 - `internal/settings`: persisted Web UI defaults and dependency diagnostics.
 - `internal/txt2epub/cmd`: `txt2epub` command-line flags.
 - `internal/server`: local upload library, conversion Web UI, and Kindle download page.
 - `internal/server/cmd`: `serve` command-line flags.
+- `internal/transfer/cmd`: transfer control, storage, and R2 probe command-line flags.
+
+Product capabilities and implementation packages are intentionally different levels: conversion,
+proofreading, LAN library delivery, six-digit transfer, and vocabulary export are the product
+modules; `store`, `task`, and `settings` are supporting infrastructure for the LAN library.
 
 ## Testing
 
@@ -65,6 +73,33 @@ locally installed and compatible `ebook-meta`, run:
 ```sh
 KINDLE_GO_CALIBRE_TEST=1 go test ./internal/azw3 -run TestCalibreExtractsNativeCover
 ```
+
+## Six-Digit Transfer
+
+The transfer product line is independent from the LAN book library. Its control plane stores
+sessions and WebRTC signaling but never accepts file-body uploads. Modern browsers can transfer
+online through WebRTC; R2 and Server A provide offline pickup and the HTTP download path required
+by Kindle's built-in browser.
+
+Run the control plane:
+
+```sh
+go run . transfer control -addr :8790 -db transfer-control.db
+```
+
+Run the independent Server A data plane:
+
+```sh
+go run . transfer storage \
+  -addr :8791 \
+  -dir transfer-storage-data \
+  -allowed-origin https://transfer.example.com \
+  -secret 'at-least-32-bytes-shared-secret'
+```
+
+R2 and production deployment configuration, security boundaries, and real-device acceptance are
+documented in [`docs/transfer.md`](docs/transfer.md) and
+[`docs/transfer-real-device-testing.md`](docs/transfer-real-device-testing.md).
 
 ## Vocabulary Export
 

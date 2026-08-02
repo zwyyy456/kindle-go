@@ -1,13 +1,13 @@
-package main
+package transfer
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,7 +46,7 @@ type storageMetadata struct {
 	UpdatedAt    int64         `json:"updated_at"`
 }
 
-type StorageServer struct {
+type storageServer struct {
 	Addr          string
 	Dir           string
 	AllowedOrigin string
@@ -59,52 +59,80 @@ type StorageServer struct {
 	downloads   atomic.Int64
 }
 
-func runStorage(args []string) error {
-	fs := flag.NewFlagSet("transferdemo storage", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	addr := fs.String("addr", defaultStorageAddr, "address for storage server A")
-	dir := fs.String("dir", "transfer-storage-data", "storage data directory")
-	origin := fs.String("allowed-origin", "", "exact HTTPS origin of control server C")
-	secret := fs.String("secret", "", "shared HMAC secret")
-	maxDownloads := fs.Int("max-downloads", 3, "maximum concurrent GET/Range downloads")
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	if fs.NArg() != 0 {
-		return errors.New("usage: go run ./tools/transferdemo storage [options]")
-	}
-	if len(*secret) < 32 {
-		return errors.New("-secret must contain at least 32 bytes")
-	}
-	if *origin == "" {
-		return errors.New("-allowed-origin is required")
-	}
-	s := &StorageServer{
-		Addr: *addr, Dir: *dir, AllowedOrigin: *origin, Secret: []byte(*secret),
-		MaxDownloads: *maxDownloads,
-	}
-	return s.Run()
+// StorageConfig configures the independently deployed offline storage server.
+type StorageConfig struct {
+	Addr          string
+	Dir           string
+	AllowedOrigin string
+	Secret        []byte
+	MaxDownloads  int
+	Stdout        io.Writer
 }
 
-func (s *StorageServer) Run() error {
+// RunStorage runs the offline storage data plane until the context is canceled or the listener fails.
+func RunStorage(ctx context.Context, config StorageConfig) error {
+	if len(config.Secret) < 32 {
+		return errors.New("storage secret must contain at least 32 bytes")
+	}
+	if config.AllowedOrigin == "" {
+		return errors.New("storage allowed origin is required")
+	}
+	if config.Dir == "" {
+		config.Dir = "transfer-storage-data"
+	}
+	server := &storageServer{
+		Addr: config.Addr, Dir: config.Dir, AllowedOrigin: config.AllowedOrigin,
+		Secret: append([]byte(nil), config.Secret...), MaxDownloads: config.MaxDownloads,
+	}
+	if config.Stdout != nil {
+		fmt.Fprintln(config.Stdout, "Transfer storage server started.")
+		for _, url := range urls(firstNonEmpty(config.Addr, defaultStorageAddr)) {
+			fmt.Fprintf(config.Stdout, "  %s\n", url)
+		}
+	}
+	return server.RunContext(ctx)
+}
+
+func (s *storageServer) RunContext(ctx context.Context) error {
 	if err := s.prepare(); err != nil {
 		return err
 	}
-	stopCleanup := make(chan struct{})
-	defer close(stopCleanup)
-	go s.runFileCleanup(stopCleanup)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go s.runFileCleanup(runCtx.Done())
 	server := &http.Server{
 		Addr: s.Addr, Handler: s.routes(), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Minute, WriteTimeout: 15 * time.Minute,
 		IdleTimeout: 60 * time.Second,
 	}
-	return server.ListenAndServe()
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		return ctx.Err()
+	}
 }
 
-func (s *StorageServer) routes() http.Handler {
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (s *storageServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/upload/", s.handleUpload)
 	mux.HandleFunc("/download/", s.handleDownload)
@@ -119,7 +147,7 @@ func (s *StorageServer) routes() http.Handler {
 	return mux
 }
 
-func (s *StorageServer) prepare() error {
+func (s *storageServer) prepare() error {
 	if len(s.Secret) < 32 {
 		return errors.New("storage secret must contain at least 32 bytes")
 	}
@@ -143,7 +171,7 @@ func (s *StorageServer) prepare() error {
 	return s.cleanupExpiredFiles()
 }
 
-func (s *StorageServer) runFileCleanup(stop <-chan struct{}) {
+func (s *storageServer) runFileCleanup(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -156,7 +184,7 @@ func (s *StorageServer) runFileCleanup(stop <-chan struct{}) {
 	}
 }
 
-func (s *StorageServer) cleanupExpiredFiles() error {
+func (s *storageServer) cleanupExpiredFiles() error {
 	entries, err := filepath.Glob(filepath.Join(s.Dir, "*.json"))
 	if err != nil {
 		return err
@@ -186,7 +214,7 @@ func (s *StorageServer) cleanupExpiredFiles() error {
 	return nil
 }
 
-func (s *StorageServer) handleUpload(w http.ResponseWriter, r *http.Request) {
+func (s *storageServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		s.handleUploadPreflight(w, r)
 		return
@@ -288,7 +316,7 @@ func (s *StorageServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (s *StorageServer) handleUploadPreflight(w http.ResponseWriter, r *http.Request) {
+func (s *storageServer) handleUploadPreflight(w http.ResponseWriter, r *http.Request) {
 	if !s.allowOrigin(w, r) {
 		return
 	}
@@ -311,7 +339,7 @@ func (s *StorageServer) handleUploadPreflight(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *StorageServer) handleDownload(w http.ResponseWriter, r *http.Request) {
+func (s *storageServer) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -357,7 +385,7 @@ func (s *StorageServer) handleDownload(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, filename, info.ModTime(), file)
 }
 
-func (s *StorageServer) handleDelete(w http.ResponseWriter, r *http.Request) {
+func (s *storageServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodDelete) {
 		return
 	}
@@ -382,7 +410,7 @@ func (s *StorageServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *StorageServer) allowOrigin(w http.ResponseWriter, r *http.Request) bool {
+func (s *storageServer) allowOrigin(w http.ResponseWriter, r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" || origin != s.AllowedOrigin {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
@@ -394,7 +422,7 @@ func (s *StorageServer) allowOrigin(w http.ResponseWriter, r *http.Request) bool
 	return true
 }
 
-func (s *StorageServer) parseClaims(token, method string) (storageClaims, error) {
+func (s *storageServer) parseClaims(token, method string) (storageClaims, error) {
 	if len(token) == 0 || len(token) > storageTokenMax {
 		return storageClaims{}, errors.New("invalid token length")
 	}
@@ -448,7 +476,7 @@ func verifyStorageClaims(token string, secret []byte) (storageClaims, error) {
 	return claims, nil
 }
 
-func (s *StorageServer) readMetadata(objectID string) (storageMetadata, error) {
+func (s *storageServer) readMetadata(objectID string) (storageMetadata, error) {
 	payload, err := os.ReadFile(s.metadataPath(objectID))
 	if err != nil {
 		return storageMetadata{}, err
@@ -460,7 +488,7 @@ func (s *StorageServer) readMetadata(objectID string) (storageMetadata, error) {
 	return meta, nil
 }
 
-func (s *StorageServer) writeMetadata(meta storageMetadata) error {
+func (s *storageServer) writeMetadata(meta storageMetadata) error {
 	payload, err := json.Marshal(meta)
 	if err != nil {
 		return err
@@ -488,7 +516,7 @@ func (s *StorageServer) writeMetadata(meta storageMetadata) error {
 	return syncDirectory(s.Dir)
 }
 
-func (s *StorageServer) objectLock(objectID string) *sync.Mutex {
+func (s *storageServer) objectLock(objectID string) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.objectLocks == nil {
@@ -500,16 +528,16 @@ func (s *StorageServer) objectLock(objectID string) *sync.Mutex {
 	return s.objectLocks[objectID]
 }
 
-func (s *StorageServer) currentTime() time.Time {
+func (s *storageServer) currentTime() time.Time {
 	if s.Now != nil {
 		return s.Now()
 	}
 	return time.Now()
 }
 
-func (s *StorageServer) objectPath(id string) string   { return filepath.Join(s.Dir, id+".data") }
-func (s *StorageServer) partPath(id string) string     { return filepath.Join(s.Dir, id+".part") }
-func (s *StorageServer) metadataPath(id string) string { return filepath.Join(s.Dir, id+".json") }
+func (s *storageServer) objectPath(id string) string   { return filepath.Join(s.Dir, id+".data") }
+func (s *storageServer) partPath(id string) string     { return filepath.Join(s.Dir, id+".part") }
+func (s *storageServer) metadataPath(id string) string { return filepath.Join(s.Dir, id+".json") }
 
 func validObjectID(id string) bool {
 	if len(id) != objectIDN*2 {

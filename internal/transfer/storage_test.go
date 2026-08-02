@@ -1,4 +1,4 @@
-package main
+package transfer
 
 import (
 	"bytes"
@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-func newTestStorage(t *testing.T) (*StorageServer, http.Handler, time.Time) {
+func newTestStorage(t *testing.T) (*storageServer, http.Handler, time.Time) {
 	t.Helper()
 	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
-	server := &StorageServer{
+	server := &storageServer{
 		Dir: t.TempDir(), AllowedOrigin: "https://transfer.example.com",
 		Secret: []byte("01234567890123456789012345678901"), MaxDownloads: 3,
 		Now: func() time.Time { return now },
@@ -27,7 +27,7 @@ func newTestStorage(t *testing.T) (*StorageServer, http.Handler, time.Time) {
 	return server, server.routes(), now
 }
 
-func storageToken(t *testing.T, server *StorageServer, method, object string, size int64, expires time.Time, nonce string) string {
+func storageToken(t *testing.T, server *storageServer, method, object string, size int64, expires time.Time, nonce string) string {
 	t.Helper()
 	token, err := signStorageClaims(storageClaims{
 		Version: 1, Method: method, ObjectID: object, ExpectedSize: size,
@@ -39,7 +39,7 @@ func storageToken(t *testing.T, server *StorageServer, method, object string, si
 	return token
 }
 
-func uploadObject(t *testing.T, server *StorageServer, handler http.Handler, object string, payload []byte, now time.Time) string {
+func uploadObject(t *testing.T, server *storageServer, handler http.Handler, object string, payload []byte, now time.Time) string {
 	t.Helper()
 	token := storageToken(t, server, http.MethodPut, object, int64(len(payload)), now.Add(time.Hour), strings.Repeat("a", 32))
 	request := httptest.NewRequest(http.MethodPut, "/upload/"+token, bytes.NewReader(payload))
@@ -180,7 +180,7 @@ func TestStorageStartupRemovesOrphanParts(t *testing.T) {
 	if err := os.WriteFile(part, []byte("partial"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	server := &StorageServer{Dir: dir, Secret: []byte("01234567890123456789012345678901"), MaxDownloads: 3}
+	server := &storageServer{Dir: dir, Secret: []byte("01234567890123456789012345678901"), MaxDownloads: 3}
 	if err := server.prepare(); err != nil {
 		t.Fatal(err)
 	}

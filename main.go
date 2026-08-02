@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	servercmd "github.com/flashdict/kindle2flashdict/internal/server/cmd"
+	transfercmd "github.com/flashdict/kindle2flashdict/internal/transfer/cmd"
 	txt2epubcmd "github.com/flashdict/kindle2flashdict/internal/txt2epub/cmd"
 	vocabcmd "github.com/flashdict/kindle2flashdict/internal/vocab/cmd"
 )
@@ -33,6 +34,8 @@ func run(args []string) error {
 		return txt2epubcmd.Run(args[1:], os.Stdout, os.Stderr)
 	case "serve":
 		return servercmd.Run(args[1:], os.Stdout, os.Stderr)
+	case "transfer":
+		return transfercmd.Run(args[1:], os.Stdout, os.Stderr)
 	default:
 		return fmt.Errorf("unknown command %q\n\nRun %s help for usage.", args[0], os.Args[0])
 	}
@@ -43,14 +46,16 @@ func printUsage(out *os.File) {
 
 Usage:
   %s vocab export [options]
-	  %s txt2epub [options] input.txt|input.epub
+  %s txt2epub [options] input.txt|input.epub
   %s serve [options]
+  %s transfer <control|storage|r2-probe> [options]
 
 Commands:
   vocab export  Export Kindle Vocabulary Builder records to FlashDict card JSON.
-	  txt2epub      Convert TXT to EPUB/AZW3 or EPUB to native AZW3.
+  txt2epub      Convert TXT to EPUB/AZW3 or EPUB to native AZW3.
   serve         Run a LAN Web UI and Kindle download page.
+  transfer      Transfer files by six-digit code via WebRTC, R2, or Server A.
 
 Run "%s <command> help" for command-specific usage.
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 }

@@ -1,4 +1,4 @@
-package main
+package transfer
 
 import (
 	"context"
@@ -63,7 +63,7 @@ type requestContext interface {
 	Deadline() (time.Time, bool)
 }
 
-func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleTransfers(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/api/transfers" {
 		http.NotFound(w, r)
 		return
@@ -89,7 +89,7 @@ func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
 	writeJSONStatus(w, http.StatusCreated, response)
 }
 
-func (s *Server) handleTransferAction(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleTransferAction(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/transfers/")
 	parts := strings.Split(rest, "/")
 	if len(parts) != 2 || !validSessionID(parts[0]) {
@@ -113,7 +113,7 @@ func (s *Server) handleTransferAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleUploadStarted(w http.ResponseWriter, r *http.Request, code string) {
+func (s *controlServer) handleUploadStarted(w http.ResponseWriter, r *http.Request, code string) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -133,7 +133,7 @@ func (s *Server) handleUploadStarted(w http.ResponseWriter, r *http.Request, cod
 	writeJSON(w, transferResponse{transferSession: session})
 }
 
-func (s *Server) handleUploadAuthorize(w http.ResponseWriter, r *http.Request, code string) {
+func (s *controlServer) handleUploadAuthorize(w http.ResponseWriter, r *http.Request, code string) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -166,7 +166,7 @@ func (s *Server) handleUploadAuthorize(w http.ResponseWriter, r *http.Request, c
 	writeJSON(w, transferResponse{transferSession: session, Upload: &upload})
 }
 
-func (s *Server) authorizeUpload(r *http.Request, session transferSession, expires time.Time) (authorizedURL, error) {
+func (s *controlServer) authorizeUpload(r *http.Request, session transferSession, expires time.Time) (authorizedURL, error) {
 	switch session.Mode {
 	case modeServerA:
 		if s.storageBaseURL == "" || len(s.storageSecret) == 0 {
@@ -204,7 +204,7 @@ func (s *Server) authorizeUpload(r *http.Request, session transferSession, expir
 	}
 }
 
-func (s *Server) handleUploadComplete(w http.ResponseWriter, r *http.Request, code string) {
+func (s *controlServer) handleUploadComplete(w http.ResponseWriter, r *http.Request, code string) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -253,7 +253,7 @@ func (s *Server) handleUploadComplete(w http.ResponseWriter, r *http.Request, co
 	writeJSON(w, transferResponse{transferSession: session})
 }
 
-func (s *Server) headStorageObject(r *http.Request, session transferSession) (objectInfo, error) {
+func (s *controlServer) headStorageObject(r *http.Request, session transferSession) (objectInfo, error) {
 	claims := storageClaims{
 		Version: 1, Method: http.MethodGet, ObjectID: session.StorageObjectID,
 		ExpectedSize: session.ExpectedSize,
@@ -290,7 +290,7 @@ func (s *Server) headStorageObject(r *http.Request, session transferSession) (ob
 	}, nil
 }
 
-func (s *Server) handleManagedStatus(w http.ResponseWriter, r *http.Request, code string) {
+func (s *controlServer) handleManagedStatus(w http.ResponseWriter, r *http.Request, code string) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -307,7 +307,7 @@ func (s *Server) handleManagedStatus(w http.ResponseWriter, r *http.Request, cod
 	writeJSON(w, transferResponse{transferSession: session})
 }
 
-func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, code string) {
+func (s *controlServer) handleRevoke(w http.ResponseWriter, r *http.Request, code string) {
 	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -339,7 +339,7 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, code strin
 	writeJSON(w, transferResponse{transferSession: session})
 }
 
-func (s *Server) deleteStorageObject(ctx context.Context, session transferSession) error {
+func (s *controlServer) deleteStorageObject(ctx context.Context, session transferSession) error {
 	claims := storageClaims{
 		Version: 1, Method: http.MethodDelete, ObjectID: session.StorageObjectID,
 		ExpectedSize: session.ExpectedSize,
@@ -369,7 +369,7 @@ func (s *Server) deleteStorageObject(ctx context.Context, session transferSessio
 	return nil
 }
 
-func (s *Server) runCleanup(ctx context.Context) {
+func (s *controlServer) runCleanup(ctx context.Context) {
 	s.cleanupExpired(ctx)
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -383,7 +383,7 @@ func (s *Server) runCleanup(ctx context.Context) {
 	}
 }
 
-func (s *Server) cleanupExpired(ctx context.Context) {
+func (s *controlServer) cleanupExpired(ctx context.Context) {
 	sessions, err := s.control.pendingExpiredObjects()
 	if err != nil {
 		return
@@ -408,7 +408,7 @@ func (s *Server) cleanupExpired(ctx context.Context) {
 	}
 }
 
-func (s *Server) handleReceive(w http.ResponseWriter, r *http.Request) {
+func (s *controlServer) handleReceive(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -488,7 +488,7 @@ func requireSmallOrEmptyBody(w http.ResponseWriter, r *http.Request, max int64) 
 	return err
 }
 
-func (s *Server) client() *http.Client {
+func (s *controlServer) client() *http.Client {
 	if s.httpClient != nil {
 		return s.httpClient
 	}

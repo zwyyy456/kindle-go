@@ -6,11 +6,15 @@ small and decision-oriented; detailed rules belong in the linked normative docum
 ## 1. Project Scope
 
 - The project is a Go 1.22 CLI and local Web application for Kindle content workflows.
-- The main product lines are `vocab`, `txt2epub`, and `serve`.
+- The main product lines are `vocab`, `txt2epub`, `serve`, and `transfer`.
 - The Web UI and Kindle listener target a trusted local network. They are not public hosting
   surfaces and must not silently acquire public-service assumptions.
-- `tools/transferdemo` is an independent transfer prototype. Its behavior and acceptance status do
-  not define Kindle Toolbox Web UI v1 completion.
+- Transfer control and storage roles are separate HTTPS deployment surfaces. Preserve their small
+  control-body limit, signed data-plane authorization, exact-origin CORS, expiry, and revocation
+  boundaries; do not apply the trusted-LAN assumptions of `serve` to them.
+- `transfer` is an independent six-digit transfer product line. Its control plane never relays file
+  bodies; WebRTC is the online path, while R2 and Server A are offline data-plane adapters required
+  for Kindle browsers. Its acceptance status does not define Kindle Toolbox Web UI v1 completion.
 
 ## 2. Rule Precedence
 
@@ -36,7 +40,7 @@ Read only the smallest set that can change the task:
 | Architecture, persistence, tasks, proofreading, or a cross-package change | `engineering-guidelines.md`; use `docs/development-plan.md` for the original design rationale |
 | AZW3 compatibility | `docs/azw3-compatibility.md` and the affected `internal/azw3` / `internal/epub` code |
 | TXT or EPUB proofreading protocol | The affected proofreader `SKILL.md` and its referenced contracts |
-| Transfer prototype | `tools/transferdemo/README.md` and `tools/transferdemo/REAL_DEVICE_TESTING.md` |
+| Six-digit transfer | `docs/transfer.md`, `docs/transfer-real-device-testing.md`, and affected `internal/transfer` code |
 
 ## 4. Implementation Rules
 
@@ -46,8 +50,9 @@ Read only the smallest set that can change the task:
   runtime switches.
 - Preserve compatibility only for a real released CLI, configuration, database, file layout, or
   target-device behavior. State the protected contract and its removal condition.
-- Keep business ownership in `library`, `generation`, `task`, `proofread`, and `settings`. HTTP and
-  CLI packages adapt requests and render results; `store` persists state but does not own workflows.
+- Keep business ownership in `library`, `generation`, `task`, `proofread`, `settings`, and
+  `transfer`. HTTP and CLI packages adapt requests and render results; stores persist state but do
+  not own workflows.
 - Put interfaces at boundaries that truly vary, especially external processes, time, and task
   executors. Do not create pass-through interfaces for every store or service.
 - Split large files by ownership, user flow, or platform boundary—not by line count alone.

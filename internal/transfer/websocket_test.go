@@ -1,4 +1,4 @@
-package main
+package transfer
 
 import (
 	"bufio"
@@ -103,7 +103,7 @@ func startWebSocketProbe(t *testing.T, headers http.Header) (net.Conn, *bufio.Re
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		(&Server{}).handleWebSocketProbe(writer, request)
+		(&controlServer{}).handleWebSocketProbe(writer, request)
 	}()
 	t.Cleanup(func() {
 		_ = clientConn.Close()

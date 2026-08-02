@@ -5,7 +5,7 @@
 在开发机启动 C：
 
 ```sh
-GOCACHE=/tmp/kindle-go-cache go run ./tools/transferdemo \
+GOCACHE=/tmp/kindle-go-cache go run . transfer control \
   -addr 0.0.0.0:8790 \
   -db /tmp/transfer-control.db
 ```

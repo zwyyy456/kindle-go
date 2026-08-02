@@ -31,7 +31,9 @@ Web UI v1 在现有 Go CLI、TXT/EPUB 解析器和原生 AZW3 writer 上渐进�
 - 管理 Web UI 和 Kindle 下载页均面向可信局域网，不增加账号、登录或访问令牌。
 - 桌面 Web UI 使用 Go `html/template` 服务端渲染，允许少量原生 JavaScript 轮询任务状态，不引入 SPA、Node.js 或前端构建链。
 - Kindle 页面保持独立只读 mux、纯 HTML、无 JavaScript，并继续使用单独监听地址。
-- 继续保留单一 Go CLI 入口和 `vocab`、`txt2epub`、`serve` 三条产品线。
+- 保留单一 Go CLI 入口。本文只设计 `vocab`、`txt2epub`、`serve` 当时已有的边界；
+  后续正式加入的 `transfer` 是独立产品线，不复用 Web 书库的任务或文件状态模型，详见
+  [`transfer.md`](transfer.md)。
 - `internal/epub`、`internal/azw3`、`internal/txt2epub` 和 `internal/converter` 中已经验证的格式逻辑优先复用。
 
 ### 2.2 数据与任务

@@ -1,4 +1,4 @@
-package main
+package transfer
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestSignalSessionFlow(t *testing.T) {
-	server := &Server{}
+	server := &controlServer{}
 	handler := server.routes()
 
 	create := httptest.NewRecorder()
@@ -86,7 +86,7 @@ func TestSignalSessionFlow(t *testing.T) {
 }
 
 func TestSignalAPIRejectsInvalidRequests(t *testing.T) {
-	handler := (&Server{}).routes()
+	handler := (&controlServer{}).routes()
 	validSignalBody := `{"session":"123456","from":"sender","type":"offer","data":{"type":"offer"}}`
 
 	tests := []struct {
@@ -119,7 +119,7 @@ func TestSignalAPIRejectsInvalidRequests(t *testing.T) {
 
 func TestCapabilityReportIsLogged(t *testing.T) {
 	var output bytes.Buffer
-	handler := (&Server{Stdout: &output}).routes()
+	handler := (&controlServer{Stdout: &output}).routes()
 	body := `{
 		"user_agent":"Kindle/legacy\nterminal-control",
 		"secure_context":false,
@@ -143,7 +143,7 @@ func TestCapabilityReportIsLogged(t *testing.T) {
 }
 
 func TestSignalAPILimitsRequestBody(t *testing.T) {
-	handler := (&Server{}).routes()
+	handler := (&controlServer{}).routes()
 	body := `{"session":"123456","from":"sender","type":"offer","data":{"sdp":"` +
 		strings.Repeat("x", maxSignalBody) +
 		`"}}`
@@ -222,7 +222,7 @@ func TestSignalStoreCapsMessagesPerSession(t *testing.T) {
 }
 
 func TestHTTPPagesAndMethods(t *testing.T) {
-	handler := (&Server{}).routes()
+	handler := (&controlServer{}).routes()
 	tests := []struct {
 		target      string
 		contentType string
@@ -310,10 +310,10 @@ func TestSenderInviteUsesCurrentProtocolAndOptionalPort(t *testing.T) {
 }
 
 func TestClientConfigRejectsTURN(t *testing.T) {
-	if _, err := parseSTUNURLs("turn:relay.example.com"); err == nil {
+	if _, err := validateSTUNURLs([]string{"turn:relay.example.com"}); err == nil {
 		t.Fatal("TURN URL accepted")
 	}
-	got, err := parseSTUNURLs("stun:one.example.com, stuns:two.example.com")
+	got, err := validateSTUNURLs([]string{"stun:one.example.com", "stuns:two.example.com"})
 	if err != nil || len(got) != 2 {
 		t.Fatalf("STUN URLs = %#v, err = %v", got, err)
 	}
