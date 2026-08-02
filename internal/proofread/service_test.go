@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +89,51 @@ func TestConcurrentConflictingAcceptsCannotBothApply(t *testing.T) {
 	decisions, err := service.store.CandidateDecisions(context.Background(), runID)
 	if err != nil || len(decisions) != 1 {
 		t.Fatalf("decisions = %#v, %v", decisions, err)
+	}
+}
+
+func TestCreateRevisionSharesDecisionCriticalSection(t *testing.T) {
+	service, _, runID := newReviewService(t, []store.ProofreadCandidateRecord{
+		reviewRecord("candidate", 0, 2, "review", "review", "错", "正"),
+	})
+	service.decisionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			service.decisionMu.Unlock()
+		}
+	}()
+
+	type result struct {
+		task task.Task
+		err  error
+	}
+	started := make(chan struct{})
+	done := make(chan result, 1)
+	go func() {
+		close(started)
+		created, err := service.CreateRevision(context.Background(), runID, true)
+		done <- result{task: created, err: err}
+	}()
+	<-started
+	for range 1000 {
+		runtime.Gosched()
+	}
+	select {
+	case value := <-done:
+		t.Fatalf("CreateRevision bypassed decision critical section: %#v, %v", value.task, value.err)
+	default:
+	}
+
+	service.decisionMu.Unlock()
+	locked = false
+	select {
+	case value := <-done:
+		if value.err != nil || value.task.ID == "" {
+			t.Fatalf("CreateRevision = %#v, %v", value.task, value.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CreateRevision did not resume after decision critical section")
 	}
 }
 

@@ -41,12 +41,12 @@ func userErrorf(format string, args ...any) error {
 }
 
 type Service struct {
-	store    *store.Store
-	library  *library.Service
-	tasks    *task.Service
-	settings *settings.Service
-	now      func() time.Time
-	decision sync.Mutex
+	store      *store.Store
+	library    *library.Service
+	tasks      *task.Service
+	settings   *settings.Service
+	now        func() time.Time
+	decisionMu sync.Mutex
 }
 
 func NewService(storage *store.Store, libraryService *library.Service, taskService *task.Service, settingsService *settings.Service) *Service {
@@ -172,6 +172,9 @@ type RevisionParameters struct {
 }
 
 func (s *Service) CreateRevision(ctx context.Context, runID string, confirmUnresolved bool) (task.Task, error) {
+	s.decisionMu.Lock()
+	defer s.decisionMu.Unlock()
+
 	run, ok, err := s.store.ProofreadRun(ctx, runID)
 	if err != nil {
 		return task.Task{}, err
@@ -228,8 +231,8 @@ func (s *Service) CreateRevision(ctx context.Context, runID string, confirmUnres
 }
 
 func (s *Service) Decide(ctx context.Context, candidateID string, request DecisionRequest) (Run, error) {
-	s.decision.Lock()
-	defer s.decision.Unlock()
+	s.decisionMu.Lock()
+	defer s.decisionMu.Unlock()
 	candidate, ok, err := s.store.ProofreadCandidate(ctx, candidateID)
 	if err != nil {
 		return Run{}, err
