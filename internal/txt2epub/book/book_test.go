@@ -9,7 +9,7 @@ import (
 
 func TestBuildSplitsByLevel2WhenPresent(t *testing.T) {
 	cfg := config.Defaults()
-	parser, err := NewParser(cfg)
+	parser, err := NewParser(Options{TXT: cfg.TXT, Metadata: cfg.Metadata, Cover: cfg.Output.Cover, Style: cfg.Style})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestBuildSplitsByLevel2WhenPresent(t *testing.T) {
 		"正文。",
 		"第2章 继续",
 		"正文。",
-	}, cfg, txt.Stats{})
+	}, txt.Stats{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,11 +36,11 @@ func TestBuildSplitsByLevel2WhenPresent(t *testing.T) {
 
 func TestBuildFallsBackToLevel1(t *testing.T) {
 	cfg := config.Defaults()
-	parser, err := NewParser(cfg)
+	parser, err := NewParser(Options{TXT: cfg.TXT, Metadata: cfg.Metadata, Cover: cfg.Output.Cover, Style: cfg.Style})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := parser.Build([]string{"第一卷 风起", "正文。", "第二卷 云涌", "正文。"}, cfg, txt.Stats{})
+	b, err := parser.Build([]string{"第一卷 风起", "正文。", "第二卷 云涌", "正文。"}, txt.Stats{})
 	if err != nil {
 		t.Fatal(err)
 	}

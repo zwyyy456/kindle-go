@@ -12,11 +12,11 @@ func TestCleanDropReplaceAndMerge(t *testing.T) {
 	cfg.TXT.DropRegex = []string{`^广告`}
 	cfg.TXT.Replace = []config.ReplaceRule{{Pattern: `　+`, With: " "}}
 
-	cleaner, err := NewCleaner(cfg)
+	cleaner, err := NewCleaner(cfg.TXT)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines, stats := cleaner.Clean("第一章 开始\n广告请收藏\n这是一个很长的段落\n被硬换行切开。\n\n\n下一段。", cfg, func(s string) bool {
+	lines, stats := cleaner.Clean("第一章 开始\n广告请收藏\n这是一个很长的段落\n被硬换行切开。\n\n\n下一段。", func(s string) bool {
 		return s == "第一章 开始"
 	})
 

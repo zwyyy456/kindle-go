@@ -17,8 +17,10 @@ type Stats struct {
 }
 
 type Cleaner struct {
-	drop    []*regexp.Regexp
-	replace []replaceRule
+	drop           []*regexp.Regexp
+	replace        []replaceRule
+	mergeLines     bool
+	trimBlankLines bool
 }
 
 type replaceRule struct {
@@ -26,9 +28,9 @@ type replaceRule struct {
 	with    string
 }
 
-func NewCleaner(cfg config.Config) (*Cleaner, error) {
-	c := &Cleaner{}
-	for _, pattern := range cfg.TXT.DropRegex {
+func NewCleaner(options config.TXTConfig) (*Cleaner, error) {
+	c := &Cleaner{mergeLines: options.MergeLines, trimBlankLines: options.TrimBlankLines}
+	for _, pattern := range options.DropRegex {
 		if strings.TrimSpace(pattern) == "" {
 			continue
 		}
@@ -38,7 +40,7 @@ func NewCleaner(cfg config.Config) (*Cleaner, error) {
 		}
 		c.drop = append(c.drop, re)
 	}
-	for _, rule := range cfg.TXT.Replace {
+	for _, rule := range options.Replace {
 		if strings.TrimSpace(rule.Pattern) == "" {
 			continue
 		}
@@ -51,7 +53,7 @@ func NewCleaner(cfg config.Config) (*Cleaner, error) {
 	return c, nil
 }
 
-func (c *Cleaner) Clean(input string, cfg config.Config, isHeading func(string) bool) ([]string, Stats) {
+func (c *Cleaner) Clean(input string, isHeading func(string) bool) ([]string, Stats) {
 	rawLines := strings.Split(input, "\n")
 	stats := Stats{OriginalLines: len(rawLines)}
 	lines := make([]string, 0, len(rawLines))
@@ -68,7 +70,7 @@ func (c *Cleaner) Clean(input string, cfg config.Config, isHeading func(string) 
 		}
 		if line == "" {
 			stats.BlankLines++
-			if cfg.TXT.TrimBlankLines {
+			if c.trimBlankLines {
 				if previousBlank {
 					continue
 				}
@@ -81,7 +83,7 @@ func (c *Cleaner) Clean(input string, cfg config.Config, isHeading func(string) 
 		lines = append(lines, line)
 	}
 
-	if cfg.TXT.MergeLines {
+	if c.mergeLines {
 		var merged int
 		lines, merged = mergeHardWrappedLines(lines, isHeading)
 		stats.MergedLines = merged

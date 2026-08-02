@@ -30,17 +30,19 @@ func AnalyzeTXT(input string, cfg config.Config) (TXTAnalysis, error) {
 		cfg.Metadata.Title = strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
 	}
 	config.Normalize(&cfg)
-	parser, err := txtbook.NewParser(cfg)
+	parser, err := txtbook.NewParser(txtbook.Options{
+		TXT: cfg.TXT, Metadata: cfg.Metadata, Cover: cfg.Output.Cover, Style: cfg.Style,
+	})
 	if err != nil {
 		return TXTAnalysis{}, err
 	}
-	cleaner, err := txttext.NewCleaner(cfg)
+	cleaner, err := txttext.NewCleaner(cfg.TXT)
 	if err != nil {
 		return TXTAnalysis{}, err
 	}
-	lines, stats := cleaner.Clean(decoded.Text, cfg, parser.IsHeading)
+	lines, stats := cleaner.Clean(decoded.Text, parser.IsHeading)
 	stats.Charset = decoded.Charset
-	parsed, err := parser.Build(lines, cfg, stats)
+	parsed, err := parser.Build(lines, stats)
 	if err != nil {
 		return TXTAnalysis{}, err
 	}

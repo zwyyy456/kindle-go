@@ -58,27 +58,41 @@ type Stats struct {
 }
 
 type Parser struct {
-	h1 *regexp.Regexp
-	h2 *regexp.Regexp
+	h1         *regexp.Regexp
+	h2         *regexp.Regexp
+	splitLevel int
+	metadata   config.MetadataConfig
+	cover      bool
+	style      config.Style
 }
 
-func NewParser(cfg config.Config) (*Parser, error) {
-	h1, err := regexp.Compile(cfg.TXT.H1Regex)
+type Options struct {
+	TXT      config.TXTConfig
+	Metadata config.MetadataConfig
+	Cover    bool
+	Style    config.Style
+}
+
+func NewParser(options Options) (*Parser, error) {
+	h1, err := regexp.Compile(options.TXT.H1Regex)
 	if err != nil {
 		return nil, fmt.Errorf("compile h1_regex: %w", err)
 	}
-	h2, err := regexp.Compile(cfg.TXT.H2Regex)
+	h2, err := regexp.Compile(options.TXT.H2Regex)
 	if err != nil {
 		return nil, fmt.Errorf("compile h2_regex: %w", err)
 	}
-	return &Parser{h1: h1, h2: h2}, nil
+	return &Parser{
+		h1: h1, h2: h2, splitLevel: options.TXT.SplitLevel,
+		metadata: options.Metadata, cover: options.Cover, style: options.Style,
+	}, nil
 }
 
 func (p *Parser) IsHeading(line string) bool {
 	return p.h1.MatchString(line) || p.h2.MatchString(line)
 }
 
-func (p *Parser) Build(lines []string, cfg config.Config, textStats txt.Stats) (Book, error) {
+func (p *Parser) Build(lines []string, textStats txt.Stats) (Book, error) {
 	blocks := make([]Block, 0, len(lines))
 	stats := Stats{Text: textStats}
 
@@ -101,7 +115,7 @@ func (p *Parser) Build(lines []string, cfg config.Config, textStats txt.Stats) (
 	}
 
 	splitLevel := 1
-	if cfg.TXT.SplitLevel >= 2 && stats.H2Count > 0 {
+	if p.splitLevel >= 2 && stats.H2Count > 0 {
 		splitLevel = 2
 	}
 	sections, headings := splitBlocks(blocks, splitLevel)
@@ -115,11 +129,11 @@ func (p *Parser) Build(lines []string, cfg config.Config, textStats txt.Stats) (
 
 	stats.SectionCount = len(sections)
 	book := Book{
-		Title:          cfg.Metadata.Title,
-		Author:         cfg.Metadata.Author,
-		Language:       cfg.Metadata.Language,
-		Cover:          cfg.Output.Cover,
-		Style:          cfg.Style,
+		Title:          p.metadata.Title,
+		Author:         p.metadata.Author,
+		Language:       p.metadata.Language,
+		Cover:          p.cover,
+		Style:          p.style,
 		Sections:       sections,
 		Headings:       headings,
 		SplitLevelUsed: splitLevel,
