@@ -201,15 +201,8 @@ VALUES(?, ?, 'artifact', 'pending', ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''),
 		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
 		return File{}, err
 	}
-	result, err := finalizeTx.ExecContext(context.Background(), `UPDATE tasks SET status = 'completed', error_code = '', error_message = '', finished_at = ?, stage = 'completed' WHERE id = ? AND status = 'running'`, formatTime(time.Now()), commit.TaskID)
-	if err != nil {
-		_ = finalizeTx.Rollback()
-		_ = os.Remove(finalPath)
-		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
-		return File{}, err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil || rows != 1 {
+	completed, err := completeRunningTask(context.Background(), finalizeTx, commit.TaskID, time.Now())
+	if err != nil || !completed {
 		_ = finalizeTx.Rollback()
 		_ = os.Remove(finalPath)
 		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
@@ -219,12 +212,6 @@ VALUES(?, ?, 'artifact', 'pending', ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''),
 		return File{}, fmt.Errorf("task %q was canceled before artifact commit", commit.TaskID)
 	}
 	if _, err := finalizeTx.ExecContext(context.Background(), `UPDATE files SET state = 'ready' WHERE id = ? AND state = 'pending'`, fileID); err != nil {
-		_ = finalizeTx.Rollback()
-		_ = os.Remove(finalPath)
-		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)
-		return File{}, err
-	}
-	if err := appendTaskEvent(context.Background(), finalizeTx, commit.TaskID, "info", "completed", "Task completed", time.Now()); err != nil {
 		_ = finalizeTx.Rollback()
 		_ = os.Remove(finalPath)
 		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM files WHERE id = ? AND state = 'pending'`, fileID)

@@ -227,6 +227,13 @@ func (s *Store) FinishTask(ctx context.Context, id, status, code, message string
 		return false, err
 	}
 	defer tx.Rollback()
+	if status == "completed" {
+		changed, err := completeRunningTask(ctx, tx, id, now)
+		if err != nil || !changed {
+			return changed, err
+		}
+		return true, tx.Commit()
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE tasks SET status = ?, error_code = ?, error_message = ?, finished_at = ?, stage = ? WHERE id = ? AND status = 'running'`, status, code, message, formatTime(now), status, id)
 	if err != nil {
 		return false, err
@@ -245,6 +252,24 @@ func (s *Store) FinishTask(ctx context.Context, id, status, code, message string
 		return false, err
 	}
 	return true, tx.Commit()
+}
+
+func completeRunningTask(ctx context.Context, tx *sql.Tx, id string, now time.Time) (bool, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'completed', error_code = '', error_message = '', finished_at = ?, stage = 'completed' WHERE id = ? AND status = 'running'`, formatTime(now), id)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		return false, err
+	}
+	if err := appendTaskEvent(ctx, tx, id, "info", "completed", "Task completed", now); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) CancelTask(ctx context.Context, id string, now time.Time) (string, bool, error) {

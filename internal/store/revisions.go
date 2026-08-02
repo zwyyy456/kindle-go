@@ -141,14 +141,8 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, values[0].id, record.SourceSHA
 		return RevisionCommitResult{}, err
 	}
 	defer finalizeTx.Rollback()
-	result, err := finalizeTx.ExecContext(context.Background(), `UPDATE tasks SET status = 'completed', error_code = '', error_message = '', finished_at = ?, stage = 'completed' WHERE id = ? AND status = 'running'`, formatTime(time.Now()), commit.TaskID)
-	if err != nil {
-		_ = finalizeTx.Rollback()
-		cleanupPending()
-		return RevisionCommitResult{}, err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil || rows != 1 {
+	completed, err := completeRunningTask(context.Background(), finalizeTx, commit.TaskID, time.Now())
+	if err != nil || !completed {
 		_ = finalizeTx.Rollback()
 		cleanupPending()
 		if err != nil {
@@ -157,11 +151,6 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, values[0].id, record.SourceSHA
 		return RevisionCommitResult{}, fmt.Errorf("task %q was canceled before revision commit", commit.TaskID)
 	}
 	if _, err := finalizeTx.ExecContext(context.Background(), `UPDATE files SET state = 'ready' WHERE task_id = ? AND state = 'pending'`, commit.TaskID); err != nil {
-		_ = finalizeTx.Rollback()
-		cleanupPending()
-		return RevisionCommitResult{}, err
-	}
-	if err := appendTaskEvent(context.Background(), finalizeTx, commit.TaskID, "info", "completed", "Task completed", time.Now()); err != nil {
 		_ = finalizeTx.Rollback()
 		cleanupPending()
 		return RevisionCommitResult{}, err

@@ -69,12 +69,8 @@ func (s *Store) CommitProofreadRun(ctx context.Context, run ProofreadRunRecord, 
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(context.Background(), `UPDATE tasks SET status = 'completed', error_code = '', error_message = '', finished_at = ?, stage = 'completed' WHERE id = ? AND status = 'running'`, formatTime(now), run.TaskID)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil || rows != 1 {
+	completed, err := completeRunningTask(context.Background(), tx, run.TaskID, now)
+	if err != nil || !completed {
 		if err != nil {
 			return err
 		}
@@ -95,9 +91,6 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.ID, run.ID, candidate.Kin
 		if err != nil {
 			return err
 		}
-	}
-	if err := appendTaskEvent(context.Background(), tx, run.TaskID, "info", "completed", "Task completed", now); err != nil {
-		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
