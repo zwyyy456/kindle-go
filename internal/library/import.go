@@ -71,7 +71,7 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 	}
 	keep = true
 	if err := s.persistCompatibility(ctx, book); err != nil {
-		_ = s.store.DeleteBook(context.Background(), book.ID)
+		_ = s.store.DeleteBookAggregate(context.Background(), book.ID)
 		return ImportResult{}, err
 	}
 	return ImportResult{Book: bookFromStore(book)}, nil
@@ -103,7 +103,7 @@ func (s *Service) ConfirmImport(ctx context.Context, token, action string) (Book
 			return Book{}, err
 		}
 		if err := s.persistCompatibility(ctx, book); err != nil {
-			_ = s.store.DeleteBook(context.Background(), book.ID)
+			_ = s.store.DeleteBookAggregate(context.Background(), book.ID)
 			return Book{}, err
 		}
 		return bookFromStore(book), nil

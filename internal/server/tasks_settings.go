@@ -123,10 +123,6 @@ func parseFloat(raw string) float64 {
 }
 
 func (h Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	values, err := h.tasks.List(r.Context(), "")
 	if err != nil {
 		h.writeInternalError(w, r, err)
@@ -137,46 +133,45 @@ func (h Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h Handler) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/tasks/")
-	if r.Method == http.MethodGet && strings.HasSuffix(rest, ".json") && !strings.Contains(strings.TrimSuffix(rest, ".json"), "/") {
-		h.writeTaskStatus(w, r, strings.TrimSuffix(rest, ".json"))
+func (h Handler) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("taskID")
+	if strings.HasSuffix(id, ".json") {
+		h.writeTaskStatus(w, r, strings.TrimSuffix(id, ".json"))
 		return
 	}
-	if r.Method == http.MethodGet && rest != "" && !strings.Contains(rest, "/") {
-		value, ok, err := h.tasks.Get(r.Context(), rest)
-		if err != nil {
-			h.writeInternalError(w, r, err)
-			return
-		}
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		events, err := h.tasks.Events(r.Context(), rest)
-		if err != nil {
-			h.writeInternalError(w, r, err)
-			return
-		}
-		if err := taskDetailTemplate.Execute(w, taskDetailPageData{Task: taskViews([]task.Task{value})[0], Events: taskEventViews(events)}); err != nil {
-			h.writeInternalError(w, r, err)
-		}
+	value, ok, err := h.tasks.Get(r.Context(), id)
+	if err != nil {
+		h.writeInternalError(w, r, err)
 		return
 	}
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[0] == "" {
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	id, action := parts[0], parts[1]
-	if action == "status" && r.Method == http.MethodGet {
-		h.writeTaskStatus(w, r, id)
+	events, err := h.tasks.Events(r.Context(), id)
+	if err != nil {
+		h.writeInternalError(w, r, err)
 		return
 	}
-	if r.Method != http.MethodPost || (action != "cancel" && action != "retry") {
-		http.NotFound(w, r)
-		return
+	if err := taskDetailTemplate.Execute(w, taskDetailPageData{Task: taskViews([]task.Task{value})[0], Events: taskEventViews(events)}); err != nil {
+		h.writeInternalError(w, r, err)
 	}
+}
+
+func (h Handler) handleTaskStatus(w http.ResponseWriter, r *http.Request) {
+	h.writeTaskStatus(w, r, r.PathValue("taskID"))
+}
+
+func (h Handler) handleTaskCancel(w http.ResponseWriter, r *http.Request) {
+	h.handleTaskAction(w, r, "cancel")
+}
+
+func (h Handler) handleTaskRetry(w http.ResponseWriter, r *http.Request) {
+	h.handleTaskAction(w, r, "retry")
+}
+
+func (h Handler) handleTaskAction(w http.ResponseWriter, r *http.Request, action string) {
+	id := r.PathValue("taskID")
 	original, ok, err := h.tasks.Get(r.Context(), id)
 	if err != nil {
 		h.writeInternalError(w, r, err)

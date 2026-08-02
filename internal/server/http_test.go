@@ -67,6 +67,26 @@ func TestWebAssetsAreEmbeddedAndScopedToWebMux(t *testing.T) {
 	}
 }
 
+func TestWebMuxUsesMethodAwareRoutes(t *testing.T) {
+	handler, _, _, _ := newHTTPTestHandler(t)
+	for _, test := range []struct {
+		method string
+		path   string
+		status int
+	}{
+		{method: http.MethodPost, path: "/books", status: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/tasks/missing/cancel", status: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/books/missing/delete", status: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/books/too/many/segments", status: http.StatusNotFound},
+	} {
+		response := httptest.NewRecorder()
+		handler.WebMux().ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+		if response.Code != test.status {
+			t.Fatalf("%s %s status = %d, want %d", test.method, test.path, response.Code, test.status)
+		}
+	}
+}
+
 func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 	handler, service, _, _ := newHTTPTestHandler(t)
 	request := multipartRequest(t, "/books/import", "book.txt", "正文")
@@ -581,6 +601,31 @@ func TestBookDeletionRequiresConfirmationAndRemovesBook(t *testing.T) {
 	}
 	if _, ok, err := service.GetBook(context.Background(), result.Book.ID); err != nil || ok {
 		t.Fatalf("deleted book = %v, %v", ok, err)
+	}
+}
+
+func TestBookDeletionReportsLibraryPolicyConflict(t *testing.T) {
+	handler, service, tasks, _ := newHTTPTestHandler(t)
+	result, err := service.Import(context.Background(), library.ImportRequest{Filename: "book.txt", Reader: strings.NewReader("source")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tasks.Create(context.Background(), task.CreateRequest{
+		BookID: result.Book.ID, Type: task.GenerateEPUB, InputFileID: result.Book.Original.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"confirm": {"delete"}}
+	request := httptest.NewRequest(http.MethodPost, "/books/"+result.Book.ID+"/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.WebMux().ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "cancel+them") {
+		t.Fatalf("delete conflict = %d, %q", response.Code, response.Header().Get("Location"))
+	}
+	if _, ok, err := service.GetBook(context.Background(), result.Book.ID); err != nil || !ok {
+		t.Fatalf("book after rejected deletion = %v, %v", ok, err)
 	}
 }
 

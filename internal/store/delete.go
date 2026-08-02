@@ -20,6 +20,11 @@ type ReferencedFileError struct {
 	Count  int
 }
 
+type ProtectedFileError struct {
+	FileID string
+	Role   string
+}
+
 type bookDeletionPaths struct {
 	files           []string
 	proofreadStates []string
@@ -33,7 +38,14 @@ func (e *ReferencedFileError) Error() string {
 	return fmt.Sprintf("file_has_references: file %s is referenced by %d ready or pending file(s)", e.FileID, e.Count)
 }
 
-func (s *Store) DeleteBook(ctx context.Context, bookID string) error {
+func (e *ProtectedFileError) Error() string {
+	return fmt.Sprintf("protected_file: %s file %s cannot be deleted separately", e.Role, e.FileID)
+}
+
+// DeleteBookAggregate atomically hides a book, removes its managed resources,
+// and converges the persisted aggregate. User-facing deletion policy belongs to
+// the library service.
+func (s *Store) DeleteBookAggregate(ctx context.Context, bookID string) error {
 	paths, err := s.beginBookDeletion(ctx, bookID)
 	if err != nil {
 		return err
@@ -45,7 +57,9 @@ func (s *Store) DeleteBook(ctx context.Context, bookID string) error {
 	return err
 }
 
-func (s *Store) DeleteArtifact(ctx context.Context, fileID string) error {
+// DeleteDerivedFile removes one deletable derived file through the persisted
+// deleting state so startup recovery can finish an interrupted operation.
+func (s *Store) DeleteDerivedFile(ctx context.Context, fileID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -65,7 +79,7 @@ func (s *Store) DeleteArtifact(ctx context.Context, fileID string) error {
 		return err
 	}
 	if role != "artifact" && role != "revision" && role != "report" && role != "audit" {
-		return fmt.Errorf("original files cannot be deleted separately")
+		return &ProtectedFileError{FileID: fileID, Role: role}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE files SET state = 'deleting' WHERE id = ? AND state = 'ready'`, fileID); err != nil {
 		return err

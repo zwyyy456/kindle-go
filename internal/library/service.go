@@ -169,11 +169,11 @@ func (s *Service) DownloadKindleFile(ctx context.Context, id string, showEPUB bo
 }
 
 func (s *Service) DeleteBook(ctx context.Context, id string) error {
-	return s.store.DeleteBook(ctx, id)
+	return mapDeletionError(s.store.DeleteBookAggregate(ctx, id))
 }
 
 func (s *Service) DeleteFile(ctx context.Context, id string) error {
-	return s.store.DeleteArtifact(ctx, id)
+	return mapDeletionError(s.store.DeleteDerivedFile(ctx, id))
 }
 
 func (s *Service) LatestKindleFiles(ctx context.Context, showEPUB bool) ([]KindleBook, error) {

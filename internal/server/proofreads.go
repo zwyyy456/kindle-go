@@ -8,22 +8,12 @@ import (
 	"github.com/flashdict/kindle2flashdict/internal/proofread"
 )
 
-func (h Handler) handleCandidateRoute(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/candidates/")
-	if r.Method != http.MethodPost || !strings.HasSuffix(path, "/decision") {
-		http.NotFound(w, r)
-		return
-	}
-	id := strings.TrimSuffix(path, "/decision")
-	if id == "" || strings.Contains(id, "/") {
-		http.NotFound(w, r)
-		return
-	}
+func (h Handler) handleCandidateDecision(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	run, err := h.proofreads.Decide(r.Context(), id, proofread.DecisionRequest{Decision: r.Form.Get("decision"), Replacement: r.Form.Get("replacement")})
+	run, err := h.proofreads.Decide(r.Context(), r.PathValue("candidateID"), proofread.DecisionRequest{Decision: r.Form.Get("decision"), Replacement: r.Form.Get("replacement")})
 	if err != nil {
 		if isCandidateNotFound(err) {
 			http.NotFound(w, r)
@@ -53,17 +43,8 @@ func isCandidateNotFound(err error) bool {
 	return errors.As(err, &userErr) && userErr.Error() == "candidate not found"
 }
 
-func (h Handler) handleProofreadRoute(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/proofreads/")
-	if r.Method != http.MethodPost || !strings.HasSuffix(path, "/revisions") {
-		http.NotFound(w, r)
-		return
-	}
-	runID := strings.TrimSuffix(path, "/revisions")
-	if runID == "" || strings.Contains(runID, "/") {
-		http.NotFound(w, r)
-		return
-	}
+func (h Handler) handleCreateRevision(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("runID")
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -81,7 +62,8 @@ func (h Handler) handleProofreadRoute(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/books/"+created.BookID+"?message=revision+task+queued", http.StatusSeeOther)
 }
 
-func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request, bookID, runID string) {
+func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request) {
+	bookID, runID := r.PathValue("bookID"), r.PathValue("runID")
 	page, ok, err := h.proofreads.Review(r.Context(), bookID, runID, proofread.ReviewQuery{Filter: r.URL.Query().Get("filter"), Page: parseInt(r.URL.Query().Get("page"))})
 	if err != nil {
 		h.writeInternalError(w, r, err)
@@ -101,7 +83,8 @@ func (h Handler) handleProofreadReview(w http.ResponseWriter, r *http.Request, b
 	}
 }
 
-func (h Handler) handleCreateProofread(w http.ResponseWriter, r *http.Request, bookID string) {
+func (h Handler) handleCreateProofread(w http.ResponseWriter, r *http.Request) {
+	bookID := r.PathValue("bookID")
 	if _, err := h.proofreads.Create(r.Context(), bookID); err != nil {
 		h.redirectActionError(w, r, "/books/"+bookID, err, "Proofreading task could not be queued. Check the book and try again.")
 		return

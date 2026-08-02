@@ -16,7 +16,7 @@ func TestDeleteBookBlocksActiveTasksThenCascadesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = storage.DeleteBook(context.Background(), book.ID)
+	err = storage.DeleteBookAggregate(context.Background(), book.ID)
 	var active *ActiveTasksError
 	if !errors.As(err, &active) || active.Count != 1 {
 		t.Fatalf("active task deletion error = %v", err)
@@ -28,7 +28,7 @@ func TestDeleteBookBlocksActiveTasksThenCascadesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.DeleteBook(context.Background(), book.ID); err != nil {
+	if err := storage.DeleteBookAggregate(context.Background(), book.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(originalPath); !os.IsNotExist(err) {
@@ -76,7 +76,7 @@ func TestOpenCompletesInterruptedBookDeletion(t *testing.T) {
 func TestDeleteBookRemovesProofreadEngineState(t *testing.T) {
 	storage, book := deletionFixture(t)
 	statePath := committedProofreadState(t, storage, book)
-	if err := storage.DeleteBook(context.Background(), book.ID); err != nil {
+	if err := storage.DeleteBookAggregate(context.Background(), book.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
@@ -148,10 +148,10 @@ func TestDeleteArtifactPreservesOriginalAndBook(t *testing.T) {
 	if _, err := storage.db.Exec(`INSERT INTO files(id, book_id, role, state, format, display_name, rel_path, sha256, size_bytes, created_at) VALUES(?, ?, 'artifact', 'ready', 'epub', 'book.epub', ?, ?, ?, ?)`, artifactID, book.ID, relPath, digest, len(data), formatTime(time.Now())); err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.DeleteArtifact(context.Background(), book.Original.ID); err == nil {
+	if err := storage.DeleteDerivedFile(context.Background(), book.Original.ID); err == nil {
 		t.Fatal("original was deletable as an artifact")
 	}
-	if err := storage.DeleteArtifact(context.Background(), artifactID); err != nil {
+	if err := storage.DeleteDerivedFile(context.Background(), artifactID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -229,7 +229,7 @@ func TestDeleteReferencedRevisionIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = storage.DeleteArtifact(context.Background(), revisionResult.Revision.ID)
+	err = storage.DeleteDerivedFile(context.Background(), revisionResult.Revision.ID)
 	var referenced *ReferencedFileError
 	if !errors.As(err, &referenced) || referenced.FileID != revisionResult.Revision.ID || referenced.Count != 1 {
 		t.Fatalf("delete referenced revision error = %v", err)
@@ -262,7 +262,7 @@ func TestDeleteBookDoesNotTouchExternalImportSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.DeleteBook(context.Background(), book.ID); err != nil {
+	if err := storage.DeleteBookAggregate(context.Background(), book.ID); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(externalPath)

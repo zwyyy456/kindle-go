@@ -65,6 +65,10 @@ func safeActionMessage(err error) (string, bool) {
 	if errors.As(err, &duplicateErr) {
 		return duplicateErr.Error(), true
 	}
+	var deletionErr *library.DeletionError
+	if errors.As(err, &deletionErr) {
+		return deletionErr.Error(), true
+	}
 	var conflictErr *task.ConflictError
 	if errors.As(err, &conflictErr) {
 		return conflictErr.Error(), true
