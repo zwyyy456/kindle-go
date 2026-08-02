@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kindle Go</title>
+  <link rel="stylesheet" href="/static/web.css">
+</head>
+<body>
+  <h1>Kindle Go</h1>
+  <p><a href="/tasks">Tasks</a> · <a href="/settings">Settings</a></p>
+  <p class="muted">Upload files from this computer, convert when needed, then download from Kindle.</p>
+  {{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
+
+  <fieldset>
+    <legend>Upload</legend>
+    <form method="post" action="/books/import" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".txt,.epub" required>
+      <button type="submit">Import</button>
+    </form>
+    <p class="muted">TXT up to 32 MiB; EPUB up to 64 MiB and 512 MiB expanded.</p>
+  </fieldset>
+
+  {{if .Duplicate.Token}}
+  <fieldset>
+    <legend>Duplicate source</legend>
+    <p><strong>{{.Duplicate.Filename}}</strong> has the same content as an existing book.</p>
+    {{range .Duplicate.Existing}}<p>{{.OriginalName}} — {{.UploadedAt}}</p>{{end}}
+    <form method="post" action="/books/import/{{.Duplicate.Token}}/confirm">
+      <button name="action" value="open" type="submit">Open existing book</button>
+      <button name="action" value="import" type="submit">Import as a new book</button>
+      <button name="action" value="cancel" type="submit">Cancel</button>
+    </form>
+  </fieldset>
+  {{end}}
+
+  <form method="get" action="/books">
+    <input type="text" name="q" value="{{.Query}}" placeholder="Search book names">
+    <select name="status"><option value="">All proofread statuses</option><option value="not_started" {{if eq .StatusFilter "not_started"}}selected{{end}}>Not started</option><option value="queued" {{if eq .StatusFilter "queued"}}selected{{end}}>Queued</option><option value="running" {{if eq .StatusFilter "running"}}selected{{end}}>Running</option><option value="completed" {{if eq .StatusFilter "completed"}}selected{{end}}>Completed</option><option value="failed" {{if eq .StatusFilter "failed"}}selected{{end}}>Failed</option><option value="canceled" {{if eq .StatusFilter "canceled"}}selected{{end}}>Canceled</option></select>
+    <select name="sort"><option value="">Newest first</option><option value="name_asc" {{if eq .Sort "name_asc"}}selected{{end}}>Name A–Z</option><option value="imported_asc" {{if eq .Sort "imported_asc"}}selected{{end}}>Oldest first</option><option value="status_asc" {{if eq .Sort "status_asc"}}selected{{end}}>Proofread status</option></select>
+    <button type="submit">Apply</button>
+  </form>
+  <p class="muted">{{.Total}} book(s), page {{.Page}}</p>
+
+  {{range .Records}}
+  <section class="record">
+    <h2><a href="/books/{{.ID}}">{{.OriginalName}}</a></h2>
+    <p class="muted">Uploaded {{.UploadedAt}} · proofread: {{.ProofreadStatus}}</p>
+    <div class="files">
+      {{range .Files}}
+        <p><a href="{{.URL}}">{{.Name}}</a> <span class="muted">{{.Kind}}, {{.Format}}, {{.Size}}</span></p>
+      {{end}}
+    </div>
+    <p><a href="/books/{{.ID}}">Open details, generate files, and view tasks</a></p>
+  </section>
+  {{else}}
+  <p>No uploads yet.</p>
+  {{end}}
+  <p>{{if .HasPrevious}}<a href="/books?q={{urlquery .Query}}&status={{.StatusFilter}}&sort={{.Sort}}&page={{.PreviousPage}}">Previous</a>{{end}} {{if .HasNext}}<a href="/books?q={{urlquery .Query}}&status={{.StatusFilter}}&sort={{.Sort}}&page={{.NextPage}}">Next</a>{{end}}</p>
+</body>
+</html>

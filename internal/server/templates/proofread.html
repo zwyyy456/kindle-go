@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Proofreading candidates — Kindle Go</title>
+  <link rel="stylesheet" href="/static/web.css">
+</head>
+<body class="proofread">
+  <p><a href="/books/{{.BookID}}">← Back to book</a> · <a href="/tasks">All tasks</a></p>
+  <h1>Proofreading candidates</h1>
+  <p class="muted">Run {{.Run.ID}} · {{.Run.Format}} · completed {{.Run.CompletedAt}} · model: {{if .Run.Model}}{{.Run.Model}}{{else}}Codex default{{end}}</p>
+  {{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
+  <form method="get"><label>Filter <select name="filter">
+  <option value="">All</option><option value="pending" {{if eq .Filter "pending"}}selected{{end}}>Pending</option>
+  <option value="automatic" {{if eq .Filter "automatic"}}selected{{end}}>Automatic</option>
+  <option value="accepted" {{if eq .Filter "accepted"}}selected{{end}}>Accepted</option>
+  <option value="modified" {{if eq .Filter "modified"}}selected{{end}}>Modified</option>
+  <option value="rejected" {{if eq .Filter "rejected"}}selected{{end}}>Rejected</option>
+  <option value="conflict" {{if eq .Filter "conflict"}}selected{{end}}>Conflicts</option>
+  </select></label><button type="submit">Apply</button></form>
+  <p class="muted">{{.Total}} candidate(s), page {{.Page}}</p>
+  <form method="post" action="/proofreads/{{.Run.ID}}/revisions">
+  {{if .Unresolved}}<p><strong>{{.Unresolved}} unresolved candidate(s)</strong> will keep their exact source text.</p><label><input type="checkbox" name="confirm_unresolved" value="1" required> Generate anyway and keep every unresolved location unchanged.</label>{{end}}
+  <button type="submit">Queue immutable revised file, report, and audit</button></form>
+  {{range .Candidates}}<section class="candidate" id="{{.Candidate.ID}}">
+  <h2>{{.Candidate.ExpectedOriginal}} → {{.Candidate.FirstReplacement}}</h2>
+  <p><strong>Status:</strong> <span class="{{if eq .Outcome "automatic"}}automatic{{end}}">{{.Outcome}}</span> · <strong>Category:</strong> {{.Candidate.Category}} · <strong>Location:</strong> {{.Location}}</p>
+  {{if .ConflictIDs}}<p class="error"><strong>Conflict:</strong> overlaps applied candidate(s) {{range .ConflictIDs}}<a href="#{{.}}">{{.}}</a> {{end}}. Reject one before applying the other.</p>{{end}}
+  <p>First review: <strong>{{.Candidate.FirstConfidence}}</strong>, proposed <code>{{.Candidate.FirstReplacement}}</code> — {{.Candidate.Reason}}</p>
+  <p>Isolated verification: <strong>{{.Candidate.Verification}}</strong>, proposed <code>{{.Candidate.VerifiedReplacement}}</code></p>
+  <pre>{{.Context}}</pre>
+  <form class="inline" method="post" action="/candidates/{{.Candidate.ID}}/decision"><input type="hidden" name="decision" value="accept"><button type="submit">Accept first proposal</button></form>
+  <form class="inline" method="post" action="/candidates/{{.Candidate.ID}}/decision"><input type="hidden" name="decision" value="reject"><button type="submit">Reject / keep original</button></form>
+  {{if eq .Candidate.Kind "text"}}<form method="post" action="/candidates/{{.Candidate.ID}}/decision"><input type="hidden" name="decision" value="modify"><label>Modified replacement <input type="text" name="replacement" value="{{.Candidate.FirstReplacement}}" required></label><button type="submit">Save modified replacement</button></form>{{end}}
+  {{if .History}}<details><summary>Decision history ({{len .History}})</summary><ol>{{range .History}}<li>{{.CreatedAt}} — {{.Decision}}{{if .Replacement}}: <code>{{.Replacement}}</code>{{end}}</li>{{end}}</ol></details>{{end}}
+  </section>{{else}}<p>No candidates match this filter.</p>{{end}}
+  <p>{{if .HasPrevious}}<a href="?filter={{urlquery .Filter}}&page={{.PreviousPage}}">Previous</a>{{end}} {{if .HasNext}}<a href="?filter={{urlquery .Filter}}&page={{.NextPage}}">Next</a>{{end}}</p>
+</body>
+</html>

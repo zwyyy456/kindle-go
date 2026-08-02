@@ -42,6 +42,7 @@ func NewHandler(
 
 func (h Handler) WebMux() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(webStaticFiles))))
 	mux.HandleFunc("/", h.handleWebRoot)
 	mux.HandleFunc("/books", h.handleBooks)
 	mux.HandleFunc("/books/", h.handleBookRoute)

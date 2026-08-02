@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tasks — Kindle Go</title>
+  <link rel="stylesheet" href="/static/web.css">
+</head>
+<body>
+  <p><a href="/books">← Library</a></p>
+  <h1>Tasks</h1>
+  {{if .Message}}<p>{{.Message}}</p>{{end}}
+  <table><thead><tr><th>Book</th><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th><th>Actions</th></tr></thead><tbody>
+  {{range .Tasks}}<tr><td><a href="/books/{{.BookID}}">{{.BookID}}</a></td><td><a href="/tasks/{{.ID}}">{{.Type}}</a></td><td>{{.Status}}{{if .Error}} — {{.Error}}{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td><td>
+  {{if .CanCancel}}<form class="inline" method="post" action="/tasks/{{.ID}}/cancel"><button type="submit">Cancel</button></form>{{end}}
+  {{if .CanRetry}}<form class="inline" method="post" action="/tasks/{{.ID}}/retry"><button type="submit">Retry from beginning</button></form>{{end}}
+  </td></tr>{{else}}<tr><td colspan="7">No tasks.</td></tr>{{end}}
+  </tbody></table>
+</body>
+</html>

@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TXT Preview — Kindle Go</title>
+  <link rel="stylesheet" href="/static/web.css">
+</head>
+<body>
+  <p><a href="/books/{{.BookID}}">← Back to book</a></p>
+  <h1>TXT Preview</h1>
+  <dl><dt>Charset</dt><dd>{{.Charset}}</dd><dt>Lines</dt><dd>original {{.OriginalLines}}, dropped {{.DroppedLines}}, blank {{.BlankLines}}, merged {{.MergedLines}}</dd><dt>Structure</dt><dd>{{.Sections}} sections, {{.Paragraphs}} paragraphs</dd></dl>
+  <h2>Table of contents</h2><ul>{{range .TOC}}<li>{{.}}</li>{{else}}<li>正文</li>{{end}}</ul>
+</body>
+</html>

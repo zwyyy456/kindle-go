@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Settings — Kindle Go</title>
+  <link rel="stylesheet" href="/static/web.css">
+</head>
+<body class="settings">
+  <p><a href="/books">← Library</a></p>
+  <h1>Global settings</h1>
+  {{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
+  <fieldset><legend>Runtime (startup only)</legend>
+  <p>Library: {{.Runtime.LibraryDir}} <span class="muted">({{.Runtime.LibrarySource}})</span></p>
+  <p>Web UI: {{.Runtime.WebAddr}} <span class="muted">({{.Runtime.WebAddrSource}})</span></p>
+  <p>Kindle: {{.Runtime.KindleAddr}} <span class="muted">({{.Runtime.KindleSource}})</span></p>
+  {{if .Runtime.ConfigPath}}<p>Config: {{.Runtime.ConfigPath}}</p>{{end}}
+  </fieldset>
+  <form method="post" action="/settings">
+  <fieldset><legend>TXT conversion defaults</legend>
+  <label>Default author <input type="text" name="author" value="{{.Values.Author}}"></label>
+  <label>Default language <input type="text" name="language" value="{{.Values.Language}}" required></label>
+  <label><input type="checkbox" name="cover" value="1" {{if .Values.Cover}}checked{{end}}> Generate text cover</label>
+  <label>H1 regex <input type="text" name="h1_regex" value="{{.Values.TXT.H1Regex}}" required></label>
+  <label>H2 regex <input type="text" name="h2_regex" value="{{.Values.TXT.H2Regex}}" required></label>
+  <label>Split level <input type="number" name="split_level" min="1" max="2" value="{{.Values.TXT.SplitLevel}}" required></label>
+  <label><input type="checkbox" name="merge_lines" value="1" {{if .Values.TXT.MergeLines}}checked{{end}}> Merge wrapped lines</label>
+  <label><input type="checkbox" name="trim_blank_lines" value="1" {{if .Values.TXT.TrimBlankLines}}checked{{end}}> Compress consecutive blank lines</label>
+  <label>Drop regexes (one per line)<textarea name="drop_regex" rows="4">{{.DropRegex}}</textarea></label>
+  <label>Replacement rules (JSON array)<textarea name="replace_json" rows="4">{{.ReplaceJSON}}</textarea></label>
+  <label>Line height <input type="text" name="line_height" value="{{.Values.Style.LineHeight}}" required></label>
+  <label>Paragraph indent <input type="text" name="paragraph_indent" value="{{.Values.Style.ParagraphIndent}}" required></label>
+  <label>Paragraph spacing <input type="text" name="paragraph_spacing" value="{{.Values.Style.ParagraphSpacing}}" required></label>
+  <label>Text align <input type="text" name="text_align" value="{{.Values.Style.TextAlign}}" required></label>
+  </fieldset>
+  <fieldset><legend>Kindle page</legend><label><input type="checkbox" name="kindle_show_epub" value="1" {{if .Values.KindleShowEPUB}}checked{{end}}> Show latest EPUB alongside latest AZW3</label></fieldset>
+  <fieldset><legend>Proofreading defaults</legend>
+  <label>Codex model (blank uses Codex default) <input type="text" name="proofread_model" value="{{.Values.Proofread.Model}}"></label>
+  <label>Batch size (characters) <input type="number" name="proofread_batch_size" min="1000" max="50000" value="{{.Values.Proofread.BatchSize}}" required></label>
+  <label>Concurrency <input type="number" name="proofread_concurrency" min="1" max="8" value="{{.Values.Proofread.Concurrency}}" required></label>
+  </fieldset>
+  <button type="submit">Save global defaults</button></form>
+  <fieldset><legend>Library diagnostics</legend><p>Database schema: v{{.System.SchemaVersion}} · journal: {{.System.JournalMode}}</p><p>Library writable: {{if .System.LibraryWritable}}yes{{else}}no{{end}} · free space: {{.SystemFree}}</p><p>Generation slot: {{.System.RunningGeneration}} running, {{.System.QueuedGeneration}} queued</p><p>Proofreading slot: {{.System.RunningProofread}} running, {{.System.QueuedProofread}} queued</p><p class="muted">Both slots select tasks from the same persistent FIFO sequence.</p></fieldset>
+  <fieldset><legend>Dependency diagnostics</legend><p>python3: {{if .Diagnostics.PythonPath}}{{.Diagnostics.PythonPath}} — {{.Diagnostics.PythonVersion}}{{else}}not found{{end}}</p><p>Codex CLI: {{if .Diagnostics.CodexPath}}{{.Diagnostics.CodexPath}} — {{.Diagnostics.CodexVersion}}{{else}}not found{{end}}</p><p>Required non-interactive flags: {{if .Diagnostics.CodexFlagsReady}}available{{else}}missing or unsupported{{end}}</p><form method="post" action="/settings/check-codex"><button type="submit">Check Codex login</button></form><p class="muted">The explicit check runs <code>codex login status</code> and does not send book content or invoke a model.</p></fieldset>
+</body>
+</html>

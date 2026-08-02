@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Task {{.Task.ID}} — Kindle Go</title>
+  <link rel="stylesheet" href="/static/web.css">
+</head>
+<body>
+  <p><a href="/tasks">← All tasks</a> · <a href="/books/{{.Task.BookID}}">Book</a></p>
+  <h1>{{.Task.Type}}</h1>
+  <p>Status: <strong>{{.Task.Status}}</strong> · stage: {{.Task.Stage}} · progress: {{.Task.Progress}}</p>
+  {{if .Task.Error}}<p class="error">{{.Task.Error}}</p>{{end}}
+  <div class="actions">
+  {{if .Task.CanCancel}}<form class="inline" method="post" action="/tasks/{{.Task.ID}}/cancel"><button type="submit">Cancel</button></form>{{end}}
+  {{if .Task.CanRetry}}<form class="inline" method="post" action="/tasks/{{.Task.ID}}/retry"><button type="submit">Retry from beginning</button></form>{{end}}
+  </div>
+  <h2>Event timeline</h2>
+  <table><thead><tr><th>Time</th><th>Level</th><th>Stage</th><th>Event</th></tr></thead><tbody>
+  {{range .Events}}<tr><td>{{.CreatedAt}}</td><td class="{{.Level}}">{{.Level}}</td><td>{{.Stage}}</td><td>{{.Message}}</td></tr>{{else}}<tr><td colspan="4">No events.</td></tr>{{end}}
+  </tbody></table>
+</body>
+</html>

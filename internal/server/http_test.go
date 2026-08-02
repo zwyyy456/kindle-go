@@ -26,6 +26,47 @@ import (
 	"github.com/flashdict/kindle2flashdict/internal/task"
 )
 
+func TestWebAssetsAreEmbeddedAndScopedToWebMux(t *testing.T) {
+	handler, _, _, _ := newHTTPTestHandler(t)
+	web := handler.WebMux()
+
+	for _, test := range []struct {
+		path        string
+		contentType string
+		body        string
+	}{
+		{path: "/static/web.css", contentType: "text/css", body: "font-family"},
+		{path: "/static/task-poll.js", contentType: "javascript", body: "data-task-status"},
+	} {
+		response := httptest.NewRecorder()
+		web.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), test.contentType) || !strings.Contains(response.Body.String(), test.body) {
+			t.Fatalf("GET %s = %d, content-type %q, body %q", test.path, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+	}
+
+	page := httptest.NewRecorder()
+	web.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/books", nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `href="/static/web.css"`) || strings.Contains(page.Body.String(), "<style>") {
+		t.Fatalf("books page did not use external embedded styles: %d, %q", page.Code, page.Body.String())
+	}
+
+	for name, mux := range map[string]http.Handler{
+		"template outside static subtree": web,
+		"static asset on Kindle mux":      handler.KindleMux(),
+	} {
+		path := "/static/templates/books.html"
+		if name == "static asset on Kindle mux" {
+			path = "/static/web.css"
+		}
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, body = %q", name, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestWebImportUsesBooksRouteAndPRG(t *testing.T) {
 	handler, service, _, _ := newHTTPTestHandler(t)
 	request := multipartRequest(t, "/books/import", "book.txt", "正文")

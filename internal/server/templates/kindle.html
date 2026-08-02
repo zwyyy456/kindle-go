@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kindle Downloads</title>
+</head>
+<body>
+  <h1>Downloads</h1>
+  <p>{{if .ShowAll}}<a href="/">Recent</a>{{else}}<a href="/?all=1">All files</a>{{end}}</p>
+  {{range .Records}}
+    <h2>{{.OriginalName}}</h2>
+    <p>{{.UploadedAt}}</p>
+    <ul>
+    {{range .Files}}
+      <li><a href="{{.URL}}">{{.Name}}</a> ({{.Format}}, {{.Size}})</li>
+    {{end}}
+    </ul>
+  {{else}}
+    <p>No downloadable files.</p>
+  {{end}}
+</body>
+</html>

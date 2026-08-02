@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{.Book.OriginalName}} — Kindle Go</title>
+  <link rel="stylesheet" href="/static/web.css">
+  <script src="/static/task-poll.js" defer></script>
+</head>
+<body>
+  <p><a href="/books">← Library</a> · <a href="/tasks">All tasks</a></p>
+  <h1>{{.Book.OriginalName}}</h1>
+  <p class="muted">Imported {{.Book.UploadedAt}} · {{.Book.InputFormat}}</p>
+  {{if .Message}}<p><strong>{{.Message}}</strong></p>{{end}}
+
+  {{if .CanGenerate}}<fieldset>
+    <legend>Generate</legend>
+    <form method="post" action="/books/{{.Book.ID}}/generate">
+      <label>Input file <select name="input_file_id">{{range .GenerationInputs}}<option value="{{.ID}}">{{.Name}} ({{.Role}}{{if .HasUnresolved}}, unresolved locations kept{{end}})</option>{{end}}</select></label>
+      <label><input type="checkbox" name="format" value="azw3" checked> AZW3</label>
+      {{if eq .Book.InputFormat "txt"}}<label><input type="checkbox" name="format" value="epub"> EPUB</label>{{end}}
+      <label>Title <input type="text" name="title" value="{{.Book.TitleDefault}}"></label>
+      <label>Author <input type="text" name="author" value="{{.Defaults.Author}}"></label>
+      <label>Language <input type="text" name="language" value="{{.Defaults.Language}}"></label>
+      <input type="hidden" name="cover_present" value="1"><label><input type="checkbox" name="cover" value="1" {{if .Defaults.Cover}}checked{{end}}> Generate text cover</label>
+      {{if eq .Book.InputFormat "txt"}}
+      <label>H1 regex <input type="text" name="h1_regex" value="{{.Defaults.TXT.H1Regex}}"></label>
+      <label>H2 regex <input type="text" name="h2_regex" value="{{.Defaults.TXT.H2Regex}}"></label>
+      <label>Split level <input type="number" name="split_level" min="1" max="2" value="{{.Defaults.TXT.SplitLevel}}"></label>
+      <input type="hidden" name="merge_lines_present" value="1"><label><input type="checkbox" name="merge_lines" value="1" {{if .Defaults.TXT.MergeLines}}checked{{end}}> Merge wrapped lines</label>
+      <input type="hidden" name="trim_blank_lines_present" value="1"><label><input type="checkbox" name="trim_blank_lines" value="1" {{if .Defaults.TXT.TrimBlankLines}}checked{{end}}> Compress consecutive blank lines</label>
+      <label>Drop regexes for this build (one per line)<textarea name="drop_regex" rows="4">{{.DropRegex}}</textarea></label>
+      <label>Replacement rules for this build (JSON array)<textarea name="replace_json" rows="4">{{.ReplaceJSON}}</textarea></label>
+      <label>Line height <input type="text" name="line_height" value="{{.Defaults.Style.LineHeight}}"></label>
+      <label>Paragraph spacing <input type="text" name="paragraph_spacing" value="{{.Defaults.Style.ParagraphSpacing}}"></label>
+      <label>Paragraph indent <input type="text" name="paragraph_indent" value="{{.Defaults.Style.ParagraphIndent}}"></label>
+      <label>Text align <input type="text" name="text_align" value="{{.Defaults.Style.TextAlign}}"></label>
+      {{end}}
+      {{if eq .Book.InputFormat "txt"}}<button type="submit" formaction="/books/{{.Book.ID}}/txt-preview">Preview TXT</button>{{end}}
+      <button type="submit">Queue generation</button>
+    </form>
+  </fieldset>{{else}}<p class="error">AZW3 generation is unavailable because this EPUB did not pass compatibility analysis.</p>{{end}}
+
+  <form method="post" action="/books/{{.Book.ID}}/proofreads"><button type="submit">Start AI proofreading with Codex CLI</button></form>
+
+  {{if .ProofreadRuns}}<h2>Proofreading runs</h2>
+  <table><thead><tr><th>Completed</th><th>Format</th><th>Model</th><th>Candidates</th></tr></thead><tbody>
+  {{range .ProofreadRuns}}<tr><td>{{.CompletedAt}}</td><td>{{.Format}}</td><td>{{if .Model}}{{.Model}}{{else}}Codex default{{end}}</td><td><a href="/books/{{$.Book.ID}}/proofreads/{{.ID}}">Review candidates</a></td></tr>{{end}}
+  </tbody></table>{{end}}
+
+  {{with .Compatibility}}
+  <h2>EPUB compatibility: {{.Status}}</h2>
+  <p>Title: {{.Metadata.Title}} · Author: {{.Metadata.Author}} · Language: {{.Metadata.Language}}</p>
+  {{if .Cover.ImageHref}}<p>Cover: {{.Cover.ImageHref}}</p>{{end}}
+  <h3>Spine</h3><ul>{{range .Spine}}<li>{{.Href}} — {{.MediaType}} {{if .Title}}— {{.Title}}{{end}}</li>{{else}}<li>No readable spine items.</li>{{end}}</ul>
+  <h3>Table of contents</h3><ul>{{range .TOC}}<li>{{.Title}} — {{.Href}}</li>{{else}}<li>No table of contents.</li>{{end}}</ul>
+  <h3>Resources</h3><ul>{{range .Resources}}<li>{{.Href}} — {{.MediaType}} — {{.Size}} bytes {{if not .Exists}}(missing){{end}}</li>{{end}}</ul>
+  {{if .Issues}}<h3>Blocking issues</h3><ul>{{range .Issues}}<li class="error"><strong>{{.Code}}</strong> [{{.Stage}}] {{.Message}}{{if .Document}} — document: {{.Document}}{{end}}{{if .Resource}} — resource: {{.Resource}}{{end}}</li>{{end}}</ul>{{end}}
+  {{end}}
+
+  <h2>Files</h2>
+  <table><thead><tr><th>Name</th><th>Role</th><th>Format</th><th>Size</th><th>Created</th><th>Source and parameters</th></tr></thead><tbody>
+  {{range .Files}}<tr><td><a href="{{.URL}}">{{.Name}}</a>{{if .Unresolved}} <span class="error">(contains unresolved source locations)</span>{{end}}{{if .CompatibilityStatus}} <span class="muted">(EPUB compatibility: {{.CompatibilityStatus}})</span>{{end}}{{if .CanDelete}} <form class="inline" method="post" action="/files/{{.ID}}/delete"><button type="submit">Delete</button></form>{{end}}</td><td>{{.Kind}}</td><td>{{.Format}}</td><td>{{.Size}}</td><td>{{.CreatedAt}}</td><td>{{if .SourceName}}Source: {{if .SourceURL}}<a href="{{.SourceURL}}">{{.SourceName}}</a>{{else}}{{.SourceName}}{{end}} ({{.SourceRole}})<br>{{end}}{{if .TaskURL}}<a href="{{.TaskURL}}">Task</a>{{end}}{{if .ProofreadURL}} · <a href="{{.ProofreadURL}}">Proofread run</a>{{end}}{{if .ParameterSummary}}<details><summary>Parameters</summary><ul>{{range .ParameterSummary}}<li>{{.}}</li>{{end}}</ul></details>{{end}}</td></tr>{{else}}<tr><td colspan="6">No files.</td></tr>{{end}}
+  </tbody></table>
+
+  <h2>Tasks</h2>
+  <table><thead><tr><th>Type</th><th>Status</th><th>Stage</th><th>Progress</th><th>Created</th><th>Actions</th></tr></thead><tbody>
+  {{range .Tasks}}<tr data-task-id="{{.ID}}" data-task-status="{{.Status}}"><td><a href="/tasks/{{.ID}}">{{.Type}}</a></td><td>{{.Status}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}</td><td>{{.Stage}}</td><td>{{.Progress}}</td><td>{{.CreatedAt}}</td><td>
+    {{if .CanCancel}}<form class="inline" method="post" action="/tasks/{{.ID}}/cancel"><button type="submit">Cancel</button></form>{{end}}
+    {{if .CanRetry}}<form class="inline" method="post" action="/tasks/{{.ID}}/retry"><button type="submit">Retry from beginning</button></form>{{end}}
+  </td></tr>{{else}}<tr><td colspan="6">No tasks.</td></tr>{{end}}
+  </tbody></table>
+  <details>
+    <summary>Delete this book</summary>
+    <p class="error">This permanently deletes the imported copy, all revisions, artifacts, reports, and task history. The file you originally imported from outside this library is not affected.</p>
+    <form method="post" action="/books/{{.Book.ID}}/delete"><label><input type="checkbox" name="confirm" value="delete" required> I understand this cannot be undone.</label><button type="submit">Delete book</button></form>
+  </details>
+</body>
+</html>
